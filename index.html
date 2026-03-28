@@ -9,7 +9,39 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@500;700;800&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@solana/web3.js@1.95.4/lib/index.iife.min.js"></script>
-<script src="https://bundle.run/bs58@5.0.0"></script>
+<script>
+// bs58 inlined — zero CDN dependency, works offline
+// Base58 alphabet used by Bitcoin/Solana
+const bs58=(()=>{
+  const ALPHA='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const BASE=58n;
+  const MAP={};for(let i=0;i<ALPHA.length;i++)MAP[ALPHA[i]]=BigInt(i);
+  function decode(str){
+    let n=0n;
+    for(const c of str){
+      if(MAP[c]===undefined)throw new Error('Invalid base58 char: '+c);
+      n=n*BASE+MAP[c];
+    }
+    // Count leading '1's → leading zero bytes
+    let leading=0;for(const c of str){if(c==='1')leading++;else break;}
+    // Convert bigint to bytes
+    const bytes=[];
+    while(n>0n){bytes.unshift(Number(n&0xffn));n>>=8n;}
+    const result=new Uint8Array(leading+bytes.length);
+    result.set(bytes,leading);
+    return result;
+  }
+  function encode(bytes){
+    let n=0n;
+    for(const b of bytes)n=(n<<8n)|BigInt(b);
+    let str='';
+    while(n>0n){str=ALPHA[Number(n%BASE)]+str;n/=BASE;}
+    for(const b of bytes){if(b!==0)break;str='1'+str;}
+    return str;
+  }
+  return{decode,encode};
+})();
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
@@ -222,9 +254,10 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
   <div class="cs-card">
     <div class="cs-ct">&#x1F310; RPC Configuration</div>
     <label class="cs-lbl">Primary RPC &mdash; Helius (fastest)</label>
-    <input class="cs-inp" id="rpc1" placeholder="https://mainnet.helius-rpc.com/?api-key=..." autocomplete="off">
+    <input class="cs-inp" id="rpc1" placeholder="https://mainnet.helius-rpc.com/?api-key=YOUR_KEY_HERE" autocomplete="off">
+    <div style="font-size:8px;color:var(--spark);margin-top:3px;margin-bottom:4px">&#x26A0; Paste the FULL URL — not just the API key</div>
     <label class="cs-lbl">Backup RPC</label>
-    <input class="cs-inp" id="rpc2" placeholder="https://your-backup.quiknode.pro/..." autocomplete="off">
+    <input class="cs-inp" id="rpc2" placeholder="https://mainnet.helius-rpc.com/?api-key=YOUR_KEY_HERE" autocomplete="off">
     <label class="cs-lbl">Jito Block Engine (NYC = closest to Youngstown)</label>
     <input class="cs-inp" id="jitoUrl" value="https://ny.mainnet.block-engine.jito.wtf">
   </div>
@@ -643,6 +676,12 @@ async function launch(){
   btn.innerHTML='<span class="spin"></span>Launching...';btn.disabled=true;
   const r1=document.getElementById('rpc1').value.trim();
   const r2=document.getElementById('rpc2').value.trim();
+  // Validate RPC URLs — must start with http, not just an API key
+  if(r1&&!r1.startsWith('http')){
+    toast('RPC must be a full URL starting with https://','warn');
+    document.getElementById('rpc1').style.borderColor='var(--stop)';
+    btn.innerHTML='&#x26A1; Launch Engine';btn.disabled=false;return;
+  }
   S.jitoUrl=document.getElementById('jitoUrl').value.trim()||'https://ny.mainnet.block-engine.jito.wtf';
   S.rpcs=[];if(r1)S.rpcs.push(r1);if(r2)S.rpcs.push(r2);S.rpcs.push('https://api.mainnet-beta.solana.com');
   try{if(r1)localStorage.setItem('m_r1',r1);if(r2)localStorage.setItem('m_r2',r2);}catch(e){}
