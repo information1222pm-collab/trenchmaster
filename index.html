@@ -647,6 +647,90 @@ const bs58 = (() => {
   return { decode, encode };
 })();
 
+
+// ═══════════════════════════════════════════════════════════
+// §0 — HARDCODED ALPHA WALLETS (77 wallets, baked in)
+// ═══════════════════════════════════════════════════════════
+const ALPHA_WALLET_LIST = [
+  { rank:1, tier:'S', addr:'J7GR6XoJfCPwZumW9xZ1nbWkyaq1oYSQuSVmCdBTx6Nf', wr7d:1.000, pnl7d:12993 },
+  { rank:2, tier:'S', addr:'Dzp1SrZ474xwGp6ZEP6cNKo39u9zeXe1YAuTkyZyv3t4', wr7d:1.000, pnl7d:12524 },
+  { rank:3, tier:'S', addr:'HiSo5kykqDPs3EG14Fk9QY4B5RvkuEs8oJTiqPX3EDAn', wr7d:0.970, pnl7d:47012 },
+  { rank:4, tier:'S', addr:'6qudAN2kV8mtCcYJxb5QQ6Vr15itdHHdeVbYm99NKMhy', wr7d:0.955, pnl7d:8391 },
+  { rank:5, tier:'S', addr:'AMRsSeU5JpqwQWJGNLMpZzRCZSFEwYQYbMnms3dD4311', wr7d:0.941, pnl7d:44177 },
+  { rank:6, tier:'S', addr:'FxwArENkKBx4QyfoEU1vkBnDzMfZV9Z1b8GBzpT9zb5k', wr7d:0.926, pnl7d:58492 },
+  { rank:7, tier:'S', addr:'3Z4YUWkv9nUJ34TQqx9Kus37Jpbp3U19i8sqCE42CYP4', wr7d:0.911, pnl7d:62907 },
+  { rank:8, tier:'S', addr:'GdRSPexhxbQz5H2zFQrNN2BAZUqEjAULBigTPvQ6oDMP', wr7d:0.886, pnl7d:35075 },
+  { rank:9, tier:'S', addr:'8FiuwM6FmVKmBLCaJ6QcNScnVw4NuNs7Tt4Skf91saF8', wr7d:0.882, pnl7d:11911 },
+  { rank:10, tier:'S', addr:'whamNNP9tHoxLg92yHvJPdYhghEoCg1qYTsh5a2oLbx', wr7d:0.880, pnl7d:78666 },
+  { rank:11, tier:'S', addr:'DTHCimq1B8bsm78e2sDQ2ip3qP5UmU1kLwZWPAW11oHa', wr7d:0.858, pnl7d:6751 },
+  { rank:12, tier:'S', addr:'4HXb7ivgvjbHC3TBesmmD9LovH8tmTv9DZsq12GMvEpU', wr7d:0.833, pnl7d:10476 },
+  { rank:13, tier:'S', addr:'HL8PXkD1JDtaQCo12ooCYYQHzNyeAV6CSno4wMXzb7H3', wr7d:0.813, pnl7d:7445 },
+  { rank:14, tier:'S', addr:'DC99qH3jXiq5pPWQd6PjjJcCxTV593s58CLPxWGpEywt', wr7d:0.799, pnl7d:15918 },
+  { rank:15, tier:'S', addr:'H8s4GoDcABkvykQSS7mUSHTSKUcxivoULUXgZDkjuoUf', wr7d:0.769, pnl7d:18385 },
+  { rank:16, tier:'S', addr:'4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk', wr7d:0.758, pnl7d:36294 },
+  { rank:17, tier:'S', addr:'93kgxYKex5wPyEkjH9P4KspLFAi3fdWBkw8vZce51pbp', wr7d:0.737, pnl7d:7181 },
+  { rank:18, tier:'S', addr:'6juJADkeTaVWjHWqidZMyqtms9NerLWMbWBz7qiEPwGM', wr7d:0.730, pnl7d:7976 },
+  { rank:19, tier:'S', addr:'devJHDj1kuTurER6GnjxL69VSTmutjqpwJ7t4AptRft', wr7d:0.722, pnl7d:22806 },
+  { rank:20, tier:'S', addr:'3DithtLayH84AM9ZTHYTgm3xFWTj9r1G1e4RTos7b6Bo', wr7d:0.713, pnl7d:5580 },
+  { rank:21, tier:'S', addr:'CPkUaB4jdLzjXuCQu72YwtbHVJM4bn1N9UmrptAkqsDG', wr7d:0.712, pnl7d:5246 },
+  { rank:22, tier:'S', addr:'5ATd36Tdq6zrtHBokC5moRs9Y5EFSNaZQ12fzRmTeNWd', wr7d:0.708, pnl7d:12497 },
+  { rank:23, tier:'S', addr:'2b2N2p7xCS9ibDqxwYgXpDSTniJwwye7n93WYuzmr74s', wr7d:0.706, pnl7d:6917 },
+  { rank:24, tier:'S', addr:'Ho8jkxgmbntBSxLLTitiYhv2DvHzn8XLbsZmkapA7RBF', wr7d:0.692, pnl7d:6901 },
+  { rank:25, tier:'S', addr:'5jtT1P4WQVL7xRRJGtijHxkApa3fk6N5un2BJoBYj5R', wr7d:0.680, pnl7d:18885 },
+  { rank:26, tier:'S', addr:'AfzEwRKEUftX7UADq8h3Q27FHxFfSakxXcW93rnpmG9R', wr7d:0.673, pnl7d:12662 },
+  { rank:27, tier:'S', addr:'5JJLDJ9d7WeP4sz6KGNRF3ueEF33dtbsihGVC5eyQu9D', wr7d:0.671, pnl7d:31499 },
+  { rank:28, tier:'S', addr:'8VY2NwpCAgeeZNpPxzyhJ64QA7py81v7qi6Y2pd8oDrK', wr7d:0.669, pnl7d:5762 },
+  { rank:29, tier:'S', addr:'3aK9HWN81oG56KcsLENEg39E8CoKYBv15vNzXgfiV2Bj', wr7d:0.667, pnl7d:5551 },
+  { rank:30, tier:'S', addr:'7kGAXsa7n1qN2FuNoJAGmzebmN9KqqLAHcwj7gvoekKk', wr7d:0.661, pnl7d:19071 },
+  { rank:31, tier:'S', addr:'9dzFKBd6EWqWsELnNQ6sDsrHEU6U6S17xjWmNo7dQdzv', wr7d:0.649, pnl7d:9308 },
+  { rank:32, tier:'S', addr:'6YCQcp4SfJbwkz8rrENYy26FAtCR2jqkTxZKTymeC7tC', wr7d:0.645, pnl7d:16208 },
+  { rank:33, tier:'S', addr:'EH5JJ5AVKdr4JoZaEhf4jvjopBuQPW2GEBqBpoDQ8WHd', wr7d:0.643, pnl7d:11023 },
+  { rank:34, tier:'S', addr:'DRJPceLCjNDiDtJoDJCQtH2P8UUNit5kndRiCwMjxFDX', wr7d:0.636, pnl7d:20773 },
+  { rank:35, tier:'S', addr:'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC', wr7d:0.627, pnl7d:18692 },
+  { rank:36, tier:'S', addr:'EYuxzK8WFKceiHPwsMo4FHdq9Uht23vpGYjU938YCYeR', wr7d:0.625, pnl7d:22356 },
+  { rank:37, tier:'S', addr:'GUgMNi2tJcjYpDSFs2VZQpjryeWRG4Xgmi1JPDEoe1TH', wr7d:0.609, pnl7d:8046 },
+  { rank:38, tier:'S', addr:'CDmFtQfpLgbeUzD34wtMVHtpF5bPt4FCs7xFCqh2KnAf', wr7d:0.607, pnl7d:8229 },
+  { rank:39, tier:'S', addr:'36gyhadZPC4mbxkVpBP9NRQUhRV8BvmtdZcRFZnqfwWP', wr7d:0.607, pnl7d:8418 },
+  { rank:40, tier:'S', addr:'8WQ6HLs1NgiK67g4ELC2gBTtN2BETa5yQnkB17aXiYbt', wr7d:0.600, pnl7d:12630 },
+  { rank:41, tier:'A', addr:'BQm74qyqiUMRBkyxgLV5TRSaerTJqPxKB3Spa4tscPTN', wr7d:0.667, pnl7d:11075 },
+  { rank:42, tier:'A', addr:'FUmdYf2USeQxP4wmp8i5Sh6sHiZDAPattH3ExFaHm1SH', wr7d:0.597, pnl7d:6495 },
+  { rank:43, tier:'A', addr:'5d3jQcuUvsuHyZkhdp78FFqc7WogrzZpTtec1X9VNkuE', wr7d:0.595, pnl7d:18837 },
+  { rank:44, tier:'A', addr:'Hn6vBWWySnxA8XjxRQDEmZEuH5QL7KqosnJGcLcUzFJ6', wr7d:0.594, pnl7d:8063 },
+  { rank:45, tier:'A', addr:'EutVuSFhYm6oXc7tJUbYuXm43EWXeCXzDKdaWaetYBDs', wr7d:0.589, pnl7d:8847 },
+  { rank:46, tier:'A', addr:'Gghj6515zeefxS2Dv7vwSSGyWqtASJFojuLwVMFsc6FN', wr7d:0.588, pnl7d:5674 },
+  { rank:47, tier:'A', addr:'9gxgKRGJGEtYeHKRSp3yjFRNvn8SdfTifMSPQ257SVLn', wr7d:0.583, pnl7d:19173 },
+  { rank:48, tier:'A', addr:'4HJS2pw6gH6casHiiCfpS8ZuhBNrynZhGGL7XsTw6mda', wr7d:0.583, pnl7d:5519 },
+  { rank:49, tier:'A', addr:'9dJKzPJQVoSLQ3ujdzUpUw3o2Ef2kTJLTgbLWnCMMD3i', wr7d:0.580, pnl7d:5485 },
+  { rank:50, tier:'A', addr:'8Y3segeZTfx167RRncbwQLXeBU6EQjiDp7kZEfC21oN6', wr7d:0.574, pnl7d:5973 },
+  { rank:51, tier:'A', addr:'69aiAKU3uJMxMLRkUEGFNt6nQ43PiVimE4ZbErJ7VSM1', wr7d:0.574, pnl7d:11321 },
+  { rank:52, tier:'A', addr:'GgbCFRHHAPv5i1fqt1D1buf8FPNA31oKrkZvXDyZymsT', wr7d:0.572, pnl7d:6912 },
+  { rank:53, tier:'A', addr:'BTf4A2exGK9BCVDNzy65b9dUzXgMqB4weVkvTMFQsadd', wr7d:0.572, pnl7d:29356 },
+  { rank:54, tier:'A', addr:'ERoP3GMTJwpdCz8nSNf5ATiPMFZt2xVLMkFqkUXfkkyS', wr7d:0.567, pnl7d:8283 },
+  { rank:55, tier:'A', addr:'ARC5JvKVCcnitPgTmmqV9xc1FJUPB43AEWPU1iMdYM7k', wr7d:0.556, pnl7d:6308 },
+  { rank:56, tier:'A', addr:'7szNtB9WXHpUdyGiBvMRaYouBBTsL2QbTtYrig8wo2vP', wr7d:0.550, pnl7d:42564 },
+  { rank:57, tier:'A', addr:'HQLeWLJRfhnzq4Ucdn3V1vgSw5ZLxRXT6QQa5bASXSdu', wr7d:0.550, pnl7d:6990 },
+  { rank:58, tier:'A', addr:'ALJ4P5QNyHeLEjpKGmA1eUfJHSEGQMjY8HLnDkSgjczb', wr7d:0.548, pnl7d:11329 },
+  { rank:59, tier:'A', addr:'4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9', wr7d:0.547, pnl7d:35840 },
+  { rank:60, tier:'A', addr:'D8n8Dy6DWC9691mR4NroSA9TdxXBxDV6Rr639RapanS4', wr7d:0.545, pnl7d:8289 },
+  { rank:61, tier:'A', addr:'G6XbF5BgoQThHcePijATNjeA9x1aXardrrEkeNxi5gNX', wr7d:0.534, pnl7d:5184 },
+  { rank:62, tier:'A', addr:'G4ZWrLSqLp5kk8b2KVDafRH3ymv1FvjkpHKiyDbaRp5M', wr7d:0.531, pnl7d:23077 },
+  { rank:63, tier:'A', addr:'qHN8kMdhSnkVosh7s9mTCANJenzkRqbivscd6q23XUx', wr7d:0.524, pnl7d:6677 },
+  { rank:64, tier:'A', addr:'9fXtvqrA8CUhyhmxSK2K8HbPE3y1V5xqXRB3AXkCG66H', wr7d:0.523, pnl7d:8688 },
+  { rank:65, tier:'A', addr:'DPNPVvoGdwNBY849ryx2JZzakWuWbDTfSUYr8aNfKLwA', wr7d:0.521, pnl7d:7826 },
+  { rank:66, tier:'A', addr:'AiWCnE1A5jFmSS1U47M1kxFh7EucbF1TA2MAYSZceDuK', wr7d:0.521, pnl7d:11635 },
+  { rank:67, tier:'A', addr:'A2wSPbjzw49RbVZMqgRTGt1Qi7YVkmubtcZttsr3LSAG', wr7d:0.520, pnl7d:8828 },
+  { rank:68, tier:'A', addr:'UQShB4z9uPZ5SUG1Arx4yLYvL57jwkGFKCDkzNPsh7Q', wr7d:0.520, pnl7d:8323 },
+  { rank:69, tier:'A', addr:'6EDaVsS6enYgJ81tmhEkiKFcb4HuzPUVFZeom6PHUqN3', wr7d:0.516, pnl7d:5360 },
+  { rank:70, tier:'A', addr:'B9kJYdzb4gB9AC3aFChReDhJ2D5YDCaR4UrEoen2NcyC', wr7d:0.511, pnl7d:7028 },
+  { rank:71, tier:'A', addr:'1aC2FgH1tujX87Bv9yMVbda2sPiRDNCsjMJoJjw3n6C', wr7d:0.509, pnl7d:5860 },
+  { rank:72, tier:'A', addr:'5xCvbtjAsNWH9mLQkpq9zeZ3Eikq3h8cXnBMJ4hPSdmD', wr7d:0.504, pnl7d:11091 },
+  { rank:73, tier:'A', addr:'DEVsZnwbqtjDyn5kJyvP4YFcfnqQdbS1u5jDyeFVy1fQ', wr7d:0.503, pnl7d:9409 },
+  { rank:74, tier:'A', addr:'5fHJszey2UdB2nETS1y6NS2wSG4ic9byKtbgJzaYzGeV', wr7d:0.501, pnl7d:5965 },
+  { rank:75, tier:'A', addr:'Gdaqp3ND6r3HVAWXpawkQU18EuQqwNxpaeeio8ASVAYd', wr7d:0.500, pnl7d:26191 },
+  { rank:76, tier:'A', addr:'HYWo71Wk9PNDe5sBaRKazPnVyGnQDiwgXCFKvgAQ1ENp', wr7d:0.500, pnl7d:16571 },
+  { rank:77, tier:'A', addr:'CDus2ry9jehJhiTwx8r3aNJkby3giXtVjNEncVxAZqYY', wr7d:0.500, pnl7d:5823 }
+];
+
 // ═══════════════════════════════════════════════════════════
 // §3 — STATE
 // ═══════════════════════════════════════════════════════════
@@ -678,9 +762,9 @@ let uiAnimFrame = null;
 // §4 — CONFIG
 // ═══════════════════════════════════════════════════════════
 const CFG = {
-  heliusUrl: '',
-  ppKey: '',
-  privKey: '',
+  heliusUrl: 'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6',
+  ppKey: 'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8',
+  privKey: 'iSLNjw3yu8X3GZybNA3RFGPz6Ded1zy38L5UhJdioyMMG8EEiusrZhxexqXiu46C89hMoRPDBvkmnRfaVja6A4J',
   buySize: 0.1,
   maxBuy: 0.5,
   stopLoss: 25,
@@ -700,8 +784,8 @@ function loadConfig() {
     const saved = localStorage.getItem('trench_v3_cfg');
     if (saved) Object.assign(CFG, JSON.parse(saved));
     // Populate fields
-    _setField('cfg-helius-url', CFG.heliusUrl);
-    _setField('cfg-pp-key', CFG.ppKey);
+    _setField('cfg-helius-url', CFG.heliusUrl || 'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6');
+    _setField('cfg-pp-key', CFG.ppKey || 'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8');
     _setField('cfg-buy-size', CFG.buySize);
     _setField('cfg-max-buy', CFG.maxBuy);
     _setField('cfg-stop', CFG.stopLoss);
@@ -722,9 +806,9 @@ function loadConfig() {
 }
 
 function saveConfig() {
-  CFG.heliusUrl   = _getField('cfg-helius-url').trim();
-  CFG.ppKey       = _getField('cfg-pp-key').trim();
-  CFG.privKey     = _getField('cfg-privkey').trim();
+  CFG.heliusUrl   = 'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6';
+  CFG.ppKey       = 'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8';
+  CFG.privKey     = 'iSLNjw3yu8X3GZybNA3RFGPz6Ded1zy38L5UhJdioyMMG8EEiusrZhxexqXiu46C89hMoRPDBvkmnRfaVja6A4J';
   CFG.buySize     = parseFloat(_getField('cfg-buy-size')) || 0.1;
   CFG.maxBuy      = parseFloat(_getField('cfg-max-buy')) || 0.5;
   CFG.stopLoss    = parseFloat(_getField('cfg-stop')) || 25;
@@ -865,7 +949,13 @@ let ppReconnectTimer = null;
 let ppReconnectDelay = 1000;
 
 function connectPumpPortal() {
-  if (ppWs && ppWs.readyState <= 1) return;
+  // If already connected via autoConnectFeed, just reuse it
+  if (ppWs && ppWs.readyState === 1) {
+    // Already subscribed — just log
+    logEntry('info', 'FEED', '', '', '', '', 'Feed already live, trading mode activated');
+    return;
+  }
+  if (ppWs && ppWs.readyState === 0) return; // connecting
 
   const url = CFG.ppKey
     ? `${PUMPPORTAL_WS}?api-key=${CFG.ppKey}`
@@ -1683,6 +1773,55 @@ function exportCSV() {
   a.click();
 }
 
+
+// ═══════════════════════════════════════════════════════════
+// §20 — AUTO FEED (connects on page load, data-only until START)
+// ═══════════════════════════════════════════════════════════
+function autoConnectFeed() {
+  if (ppWs && ppWs.readyState <= 1) return;
+  const url = CFG.ppKey
+    ? `${PUMPPORTAL_WS}?api-key=${CFG.ppKey}`
+    : PUMPPORTAL_WS;
+
+  ppWs = new WebSocket(url);
+
+  ppWs.onopen = () => {
+    STATE.ppWsReady = true;
+    setLed('pp-led', 'green');
+    ppReconnectDelay = 1000;
+
+    // Subscribe all 77 wallets immediately
+    const wallets = Array.from(STATE.alphaWallets.keys());
+    ppWs.send(JSON.stringify({ method: 'subscribeAccountTrade', keys: wallets }));
+    ppWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
+
+    logEntry('info', 'FEED', '', '', '', '', `PumpPortal live — ${wallets.length} wallets subscribed`);
+    updateStatusMsg(`Feed live (${wallets.length} wallets) — set keys & click START to trade`);
+
+    ppHeartbeat = setInterval(() => {
+      if (ppWs?.readyState === 1) ppWs.send(JSON.stringify({ method: 'ping' }));
+    }, HEARTBEAT_MS);
+  };
+
+  ppWs.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      handlePPMessage(msg);
+    } catch (_) {}
+  };
+
+  ppWs.onerror = () => setLed('pp-led', 'amber');
+
+  ppWs.onclose = () => {
+    STATE.ppWsReady = false;
+    setLed('pp-led', 'off');
+    clearInterval(ppHeartbeat);
+    // Always reconnect feed — even when not trading
+    ppReconnectDelay = Math.min(ppReconnectDelay * 2, 30000);
+    ppReconnectTimer = setTimeout(() => autoConnectFeed(), ppReconnectDelay);
+  };
+}
+
 // ── METRICS LOOP (UI refresh, not blocking trading)
 setInterval(() => queueUiUpdate(renderMetrics), 1000);
 setInterval(fetchBalance, 60000);
@@ -1695,16 +1834,51 @@ setInterval(() => queueUiUpdate(renderPositions), 2000);
 // ═══════════════════════════════════════════════════════════
 (function init() {
   loadConfig();
+
+  // ── AUTO-LOAD 77 HARDCODED WALLETS ──────────────────────
+  // Always seed from baked-in list first, then overlay any saved config
+  for (const w of ALPHA_WALLET_LIST) {
+    STATE.alphaWallets.set(w.addr, { tier: w.tier, label: w.addr.slice(0,6) + '…' });
+    if (!STATE.walletStats.has(w.addr)) {
+      STATE.walletStats.set(w.addr, { buys: 0, wins: 0, losses: 0, pnl: 0, copied: 0 });
+    }
+  }
+  document.getElementById('wallet-count').textContent = STATE.alphaWallets.size;
+  document.getElementById('wallets-subscribed').textContent = `WALLETS: ${STATE.alphaWallets.size}`;
+
+  // Populate textarea for visibility
+  const textarea = document.getElementById('cfg-wallets');
+  if (!textarea.value.trim()) {
+    const lines = ALPHA_WALLET_LIST.map(w => w.tier === 'S' ? `S:${w.addr}` : w.addr);
+    textarea.value = lines.join('\n');
+  }
+
   if (CFG.lightning) toggleLightning(true);
-  logEntry('info', 'INIT', '', '', '', '', 'TRENCH v3.0 loaded — dual feed, pre-cached BH, dynamic tips');
-  updateStatusMsg('Ready — configure keys and click START');
+
+  logEntry('info', 'INIT', '', '', '', '', `TRENCH v3.0 — ${STATE.alphaWallets.size} wallets baked in`);
+
+  // ── AUTO-CONNECT PUMPPORTAL FEED (no START needed for data) ──
+  // Connect WS immediately so signals are captured even before trading starts
+  autoConnectFeed();
+
+  updateStatusMsg(`${STATE.alphaWallets.size} wallets loaded — set keys & click START to trade`);
   renderMetrics();
   renderPositions();
   renderWalletStats();
 
-  // Init keypair if privkey stored in session
+  // Auto-init keypair from hardcoded key
+  if (CFG.privKey) {
+    try {
+      const sk = bs58.decode(CFG.privKey);
+      STATE.keypair = solanaWeb3.Keypair.fromSecretKey(sk);
+      console.log('Keypair loaded:', STATE.keypair.publicKey.toBase58().slice(0,8) + '...');
+    } catch(e) { console.error('Keypair init failed', e); }
+  }
+
+  // Auto-init connection from hardcoded Helius URL
   if (CFG.heliusUrl) {
     STATE.connection = new solanaWeb3.Connection(CFG.heliusUrl, { commitment: 'processed' });
+    fetchBalance();
   }
 })();
 </script>
