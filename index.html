@@ -582,7 +582,7 @@ const S={
   mode:'auto',keypair:null,phantom:null,pubkey:null,balanceSol:0,rpcs:[],jitoUrl:'',
   ws:null,positions:{},feed:[],log:[],wstats:{},
   risk:{cb:false,consec:0,daily:0,dailyReset:Date.now()+86400000},
-  paused:false,wFilter:'all',wSortKey:'rank',wSortAsc:true,
+  paper:false,paused:false,wFilter:'all',wSortKey:'rank',wSortAsc:true,
   dedup:new Set(),signals:0,wins:0,losses:0,totalPnl:0,startTime:Date.now(),
   latDetect:[],latExec:[],pendingConf:{},
   mlModels:{rug:null,pump:null},
@@ -701,8 +701,8 @@ async function autoLaunch() {
     return;
   }
 
-  // Paper mode from HC config
-  S.paper = HC.paper;
+  // Paper mode from HC config — set immediately
+  S.paper = (HC.paper === true);
 
   // Load user prefs (sizes, stops) but strip any sensitive keys
   try {
@@ -757,12 +757,19 @@ function togglePaper() {
   updatePaperBadge();
   const btn = document.getElementById('paper-btn');
   if (btn) {
-    btn.textContent = S.paper ? '📄 PAPER: ON' : '📄 PAPER: OFF';
-    btn.style.background = S.paper ? 'rgba(255,204,0,0.18)' : '';
-    btn.style.borderColor = S.paper ? 'var(--hold)' : '';
-    btn.style.color = S.paper ? 'var(--hold)' : '';
+    btn.textContent = S.paper ? '📄 PAPER: ON' : '💸 LIVE: ON';
+    btn.style.background = S.paper ? 'rgba(255,204,0,0.18)' : 'rgba(0,255,170,0.1)';
+    btn.style.borderColor = S.paper ? 'var(--hold)' : 'var(--go)';
+    btn.style.color = S.paper ? 'var(--hold)' : 'var(--go)';
   }
-  addFeed('info', S.paper ? '📄 PAPER MODE ON — no real trades' : '💸 LIVE MODE ON — real trades active', '');
+  // Toast so user sees mode change clearly
+  if(S.paper){
+    toast('📄 PAPER MODE — signals log, zero real TX','info');
+    addFeed('info','📄 PAPER MODE ON','no real trades will fire');
+  } else {
+    toast('💸 LIVE MODE — real trades firing','trade');
+    addFeed('info','💸 LIVE MODE ON','real trades active');
+  }
 }
 
 async function launch(){
@@ -878,9 +885,11 @@ async function onMsg(m){
 // ── Risk guard (mirrors Rust circuit_breaker.rs) ──────────────────
 function canTrade(mint){
   if(S.paused)return false;
-  if(S.risk.cb)return false;
   if(S.positions[mint])return false;
   if(Object.keys(S.positions).length>=CFG.maxpos)return false;
+  // Paper mode bypasses balance, reserve, CB, and daily limits
+  if(S.paper)return true;
+  if(S.risk.cb)return false;
   if(Date.now()>S.risk.dailyReset){S.risk.daily=0;S.risk.dailyReset=Date.now()+86400000;}
   if(S.risk.daily>=CFG.daily){addFeed('warn','⛔ Daily limit',''+S.risk.daily+'/'+CFG.daily);return false;}
   const need=CFG.size/100,avail=S.balanceSol-CFG.res/100;
@@ -898,16 +907,17 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   // ── PAPER MODE ─────────────────────────────────────────────────
   if(S.paper){
     const lat=Math.round(performance.now()-t0);
+    const paperSz = sz > 0 ? sz : (CFG.size/100) || 0.1; // fallback if Kelly returns 0
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
-      sizeSol:sz,entryTime:Date.now(),
+      sizeSol:paperSz,entryTime:Date.now(),
       entryPrice:0,currentPrice:0,highPrice:0,priceTickCount:0,
       sig:'PAPER_'+mint.slice(0,8),conf:dec.conf,status:'paper'};
     S.risk.daily++;
     if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
     S.wstats[w.rank].copies++;
     if(S.ws?.readyState===1)S.ws.send(JSON.stringify({method:'subscribeTokenTrade',keys:[mint]}));
-    toast('📄 PAPER BUY '+sym+' '+sz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+']','trade');
-    addFeed('buy','📄 PAPER BUY '+sym,sz.toFixed(3)+'◎ conf='+dec.conf.toFixed(2)+' '+lat+'ms');
+    toast('📄 PAPER BUY '+sym+' '+paperSz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+']','trade');
+    addFeed('buy','📄 PAPER BUY '+sym,paperSz.toFixed(3)+'◎ conf='+dec.conf.toFixed(2)+' W#'+w.rank+' '+lat+'ms');
     return;
   }
   // ── LIVE MODE ──────────────────────────────────────────────────
