@@ -336,6 +336,7 @@
 <div id="header">
   <div id="logo">⚡TRENCH</div>
   <div id="version-badge">v3.0</div>
+  <span id="paper-badge" style="font-family:var(--font-display);font-size:8px;font-weight:700;padding:2px 7px;border-radius:2px;letter-spacing:1px;background:var(--amber);color:var(--bg);display:none;animation:lightning-pulse 1.2s infinite">📄 PAPER</span>
   <span id="lightning-badge">⚡ LIGHTNING</span>
   <div class="feed-indicator">
     <div class="led" id="pp-led"></div>
@@ -380,6 +381,10 @@
   <div class="metric-cell">
     <span class="metric-label">Session PnL</span>
     <span class="metric-value" id="m-pnl">0.00</span>
+  </div>
+  <div class="metric-cell" id="paper-metric-cell" style="display:none; border-left:2px solid var(--amber)">
+    <span class="metric-label" style="color:var(--amber)">Paper PnL</span>
+    <span class="metric-value amber" id="m-paper-pnl">0.00</span>
   </div>
 </div>
 
@@ -447,6 +452,14 @@
             <label>Circuit: Max Loss SOL</label>
             <input type="number" id="cfg-cb-loss" value="2" step="0.5">
           </div>
+        </div>
+        <div class="section-divider">Execution Mode</div>
+        <div class="toggle-row" style="border:1px solid var(--amber); padding:6px 8px; border-radius:2px; margin-bottom:8px">
+          <span class="toggle-label" style="color:var(--amber)">📄 PAPER MODE <span id="paper-mode-label" style="font-size:9px; color:var(--text-mute)">(simulate only)</span></span>
+          <label class="toggle">
+            <input type="checkbox" id="cfg-paper" onchange="togglePaperMode(this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
         <div class="section-divider">Speed Settings</div>
         <div class="toggle-row">
@@ -749,6 +762,10 @@ const STATE = {
   losses: 0,
   sessionPnl: 0,
   circuitTripped: false,
+  paperTrades: [],     // paper trade log
+  paperPnl: 0,
+  paperWins: 0,
+  paperLosses: 0,
   sessionLoss: 0,
   ppWsReady: false,
   hlWsReady: false,
@@ -777,6 +794,7 @@ const CFG = {
   mirrorExit: true,
   mlFilter: true,
   kellyEnabled: true,
+  paperMode: false,  // paper = simulate only, real = live TX
 };
 
 function loadConfig() {
@@ -821,6 +839,8 @@ function saveConfig() {
   CFG.mirrorExit  = document.getElementById('cfg-mirror').checked;
   CFG.mlFilter    = document.getElementById('cfg-ml').checked;
   CFG.kellyEnabled= document.getElementById('cfg-kelly').checked;
+  CFG.paperMode   = document.getElementById('cfg-paper').checked;
+  localStorage.setItem('trench_paper_mode', CFG.paperMode);
   CFG.wallets     = document.getElementById('cfg-wallets').value.trim();
 
   const toSave = { ...CFG }; delete toSave.privKey; // never persist key
@@ -1027,18 +1047,24 @@ function unsubscribeTokenTrades(mint) {
 function handlePPMessage(msg) {
   const t0 = performance.now();
 
-  // Price tick for open position
-  if (msg.mint && STATE.positions.has(msg.mint)) {
-    const pos = STATE.positions.get(msg.mint);
-    if (msg.sol_amount && msg.token_amount) {
-      const price = msg.sol_amount / msg.token_amount;
-      if (price > 0) {
-        if (pos.entryPrice === 0 && pos.tickCount === 0) {
-          pos.entryPrice = price;
-        }
+  // Price tick for open position (real + paper)
+  if (msg.mint && (STATE.positions.has(msg.mint) || PAPER_POSITIONS.has(msg.mint))) {
+    const price = (msg.sol_amount && msg.token_amount)
+      ? msg.sol_amount / msg.token_amount : 0;
+
+    if (price > 0) {
+      // Real position
+      if (STATE.positions.has(msg.mint)) {
+        const pos = STATE.positions.get(msg.mint);
+        if (pos.entryPrice === 0 && pos.tickCount === 0) pos.entryPrice = price;
         pos.currentPrice = price;
         pos.tickCount++;
         if (price > pos.highWaterMark) pos.highWaterMark = price;
+      }
+      // Paper position
+      if (PAPER_POSITIONS.has(msg.mint)) {
+        updatePaperPositionPrice(msg.mint, price);
+        checkPaperStops();
       }
     }
   }
@@ -1384,7 +1410,13 @@ async function onAlphaBuy(msg, walletMeta, t0) {
   logEntry('info', 'SIGNAL', `${(sol_amount||0).toFixed(2)}S`,
     truncMint(mint), '…', '', `${walletMeta.tier}-tier ${walletMeta.label} → ${poolLabel}`);
 
-  // Execute buy
+  // ── PAPER TRADE (always fires if paper mode on)
+  if (CFG.paperMode) {
+    await paperBuy(mint, pool, walletAddr, walletMeta, t0);
+  }
+
+  // ── REAL TRADE (only if paper mode is OFF)
+  if (CFG.paperMode) return; // skip real TX
   const result = await executeBuy(mint, pool, walletAddr, t0);
   const latMs = result.latencyMs || 0;
 
@@ -1430,6 +1462,12 @@ async function onAlphaBuy(msg, walletMeta, t0) {
 
 async function onAlphaSell(msg, walletMeta, t0) {
   const { mint, pool } = msg;
+
+  // Paper mirror exit
+  if (CFG.paperMode && PAPER_POSITIONS.has(mint)) {
+    await paperSell(mint, 'MIRROR_EXIT', t0);
+  }
+
   const pos = STATE.positions.get(mint);
   if (!pos) return;
   if (pos.tickCount < MIN_TICKS_BEFORE_EXIT) return;
@@ -1822,6 +1860,173 @@ function autoConnectFeed() {
   };
 }
 
+
+// ═══════════════════════════════════════════════════════════
+// §21 — PAPER TRADE ENGINE
+// Identical logic to real trades — no TX broadcast
+// ═══════════════════════════════════════════════════════════
+const PAPER_POSITIONS = new Map(); // mint → paper position
+
+async function paperBuy(mint, pool, walletAddr, walletMeta, signalTime) {
+  const size = kellySize(walletAddr);
+  const t1 = performance.now();
+  const latencyMs = Math.round(t1 - signalTime);
+
+  PAPER_POSITIONS.set(mint, {
+    mint, pool, walletAddr, walletMeta,
+    size, entryPrice: 0, currentPrice: 0,
+    highWaterMark: 0, tickCount: 0,
+    openedAt: Date.now(),
+    simSig: 'PAPER_' + mint.slice(0,8) + '_' + Date.now(),
+  });
+
+  // Subscribe token ticks for price tracking
+  subscribeTokenTrades(mint);
+
+  const poolLabel = pool === 'pump-amm' ? 'PumpSwap' : 'pump.fun';
+  logEntry('buy',
+    '📄BUY', `${size}S`, truncMint(mint),
+    `${latencyMs}ms`, '',
+    `PAPER — ${walletMeta.tier}-tier via ${poolLabel}`
+  );
+
+  STATE.signals++;
+  queueUiUpdate(renderMetrics);
+  queueUiUpdate(renderPaperPositions);
+}
+
+async function paperSell(mint, reason, signalTime) {
+  const pos = PAPER_POSITIONS.get(mint);
+  if (!pos) return;
+  PAPER_POSITIONS.delete(mint);
+  unsubscribeTokenTrades(mint);
+
+  const t1 = performance.now();
+  const latencyMs = signalTime ? Math.round(t1 - signalTime) : 0;
+
+  let pnl = 0;
+  if (pos.entryPrice > 0 && pos.currentPrice > 0) {
+    pnl = pos.size * (pos.currentPrice / pos.entryPrice - 1);
+  }
+
+  const isWin = pnl > 0;
+  if (isWin) STATE.paperWins++; else STATE.paperLosses++;
+  STATE.paperPnl += pnl;
+
+  STATE.paperTrades.push({ mint, reason, pnl, ts: Date.now() });
+
+  const pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(4);
+  logEntry('sell',
+    '📄SELL', '', truncMint(mint),
+    `${latencyMs}ms`, pnlStr,
+    `PAPER — ${reason}`
+  );
+
+  queueUiUpdate(renderMetrics);
+  queueUiUpdate(renderPaperPositions);
+}
+
+// Feed paper positions price ticks from the same WS
+function updatePaperPositionPrice(mint, price) {
+  const pos = PAPER_POSITIONS.get(mint);
+  if (!pos || price <= 0) return;
+  if (pos.entryPrice === 0 && pos.tickCount === 0) pos.entryPrice = price;
+  pos.currentPrice = price;
+  pos.tickCount++;
+  if (price > pos.highWaterMark) pos.highWaterMark = price;
+}
+
+// Paper stop monitor — runs on same rAF loop
+function checkPaperStops() {
+  const now = Date.now();
+  for (const [mint, pos] of PAPER_POSITIONS.entries()) {
+    if (pos.entryPrice <= 0 || pos.tickCount < MIN_TICKS_BEFORE_EXIT) continue;
+    if (now - pos.openedAt < MIN_HOLD_MS) continue;
+
+    const pct = (pos.currentPrice / pos.entryPrice - 1) * 100;
+    const trailDrop = pos.highWaterMark > 0
+      ? (1 - pos.currentPrice / pos.highWaterMark) * 100 : 0;
+
+    let reason = null;
+    if (pct <= -CFG.stopLoss)             reason = `STOP_LOSS (${pct.toFixed(1)}%)`;
+    else if (pct >= CFG.takeProfit)        reason = `TAKE_PROFIT (+${pct.toFixed(1)}%)`;
+    else if (trailDrop >= CFG.trailingStop) reason = `TRAIL_STOP (-${trailDrop.toFixed(1)}% from peak)`;
+
+    if (reason) paperSell(mint, reason, performance.now());
+  }
+}
+
+function renderPaperPositions() {
+  // Inject a paper positions section after the real positions table
+  let paperDiv = document.getElementById('paper-pos-section');
+  if (!paperDiv) {
+    paperDiv = document.createElement('div');
+    paperDiv.id = 'paper-pos-section';
+    paperDiv.style.cssText = 'border-top:1px solid var(--amber); margin-top:4px;';
+    const posPanel = document.querySelector('#positions-body').closest('.panel');
+    posPanel.querySelector('.panel-body').appendChild(paperDiv);
+  }
+
+  if (PAPER_POSITIONS.size === 0) {
+    paperDiv.innerHTML = '<div style="padding:6px 12px; font-size:9px; color:var(--amber); opacity:0.6">📄 No paper positions</div>';
+    return;
+  }
+
+  const rows = ['<div style="padding:4px 8px; font-size:9px; color:var(--amber); letter-spacing:1px">📄 PAPER POSITIONS</div>'];
+  rows.push('<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+    '<th style="font-size:9px;color:var(--text-mute);padding:2px 6px;text-align:left">Token</th>' +
+    '<th style="font-size:9px;color:var(--text-mute);padding:2px 6px;text-align:left">Entry</th>' +
+    '<th style="font-size:9px;color:var(--text-mute);padding:2px 6px;text-align:left">Now</th>' +
+    '<th style="font-size:9px;color:var(--text-mute);padding:2px 6px;text-align:left">P&L</th>' +
+    '<th style="font-size:9px;color:var(--text-mute);padding:2px 6px;text-align:left">Exit</th>' +
+    '</tr></thead><tbody>');
+
+  for (const [mint, pos] of PAPER_POSITIONS.entries()) {
+    let pct = 0;
+    if (pos.entryPrice > 0 && pos.currentPrice > 0) {
+      pct = (pos.currentPrice / pos.entryPrice - 1) * 100;
+    }
+    const pnlClass = pct >= 0 ? 'color:var(--green)' : 'color:var(--red)';
+    rows.push(`<tr style="border-bottom:1px solid rgba(255,170,0,0.1)">
+      <td style="padding:4px 6px;font-size:10px;color:var(--blue)">${truncMint(mint)}</td>
+      <td style="padding:4px 6px;font-size:10px">${pos.entryPrice > 0 ? pos.entryPrice.toExponential(2) : '…'}</td>
+      <td style="padding:4px 6px;font-size:10px">${pos.currentPrice > 0 ? pos.currentPrice.toExponential(2) : '…'}</td>
+      <td style="padding:4px 6px;font-size:10px;${pnlClass}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</td>
+      <td style="padding:4px 6px"><button style="font-size:9px;background:transparent;border:1px solid var(--amber);color:var(--amber);padding:2px 5px;cursor:pointer;border-radius:1px" onclick="paperSell('${mint}','MANUAL',performance.now())">EXIT</button></td>
+    </tr>`);
+  }
+  rows.push('</tbody></table>');
+  paperDiv.innerHTML = rows.join('');
+
+  // Update paper PnL metric
+  const paperPnlEl = document.getElementById('m-paper-pnl');
+  if (paperPnlEl) {
+    paperPnlEl.textContent = (STATE.paperPnl >= 0 ? '+' : '') + STATE.paperPnl.toFixed(4);
+    paperPnlEl.className = 'metric-value' + (STATE.paperPnl >= 0 ? ' amber' : ' red');
+  }
+}
+
+function togglePaperMode(on) {
+  CFG.paperMode = on;
+  document.getElementById('paper-badge').style.display = on ? 'inline-block' : 'none';
+  document.getElementById('paper-metric-cell').style.display = on ? 'flex' : 'none';
+  const label = document.getElementById('paper-mode-label');
+  if (label) label.textContent = on ? '(active — no real trades)' : '(simulate only)';
+  toast(on ? '📄 Paper mode ON — all trades simulated' : '💸 Paper mode OFF — LIVE trading', on ? 'amber' : 'green');
+  queueUiUpdate(renderPaperPositions);
+}
+
+function loadPaperCfg() {
+  const saved = localStorage.getItem('trench_paper_mode');
+  if (saved === 'true') {
+    CFG.paperMode = true;
+    const el = document.getElementById('cfg-paper');
+    if (el) el.checked = true;
+    togglePaperMode(true);
+  }
+}
+
+
 // ── METRICS LOOP (UI refresh, not blocking trading)
 setInterval(() => queueUiUpdate(renderMetrics), 1000);
 setInterval(fetchBalance, 60000);
@@ -1854,6 +2059,7 @@ setInterval(() => queueUiUpdate(renderPositions), 2000);
   }
 
   if (CFG.lightning) toggleLightning(true);
+  loadPaperCfg();
 
   logEntry('info', 'INIT', '', '', '', '', `TRENCH v3.0 — ${STATE.alphaWallets.size} wallets baked in`);
 
@@ -1884,4 +2090,3 @@ setInterval(() => queueUiUpdate(renderPositions), 2000);
 </script>
 </body>
 </html>
-
