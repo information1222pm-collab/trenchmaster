@@ -797,13 +797,33 @@ const CFG = {
   paperMode: false,  // paper = simulate only, real = live TX
 };
 
+// Hardcoded keys — NEVER overridden by localStorage
+const HARDCODED = {
+  heliusUrl: 'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6',
+  ppKey:     'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8',
+  privKey:   'iSLNjw3yu8X3GZybNA3RFGPz6Ded1zy38L5UhJdioyMMG8EEiusrZhxexqXiu46C89hMoRPDBvkmnRfaVja6A4J',
+};
+
 function loadConfig() {
   try {
     const saved = localStorage.getItem('trench_v3_cfg');
-    if (saved) Object.assign(CFG, JSON.parse(saved));
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Load user prefs (sizes, stops, toggles) but NEVER the keys or paperMode
+      delete parsed.heliusUrl;
+      delete parsed.ppKey;
+      delete parsed.privKey;
+      delete parsed.paperMode; // always boot in REAL mode
+      Object.assign(CFG, parsed);
+    }
+    // Hardcoded keys always win — applied after any localStorage merge
+    CFG.heliusUrl = HARDCODED.heliusUrl;
+    CFG.ppKey     = HARDCODED.ppKey;
+    CFG.privKey   = HARDCODED.privKey;
+    CFG.paperMode = false; // always start real
     // Populate fields
-    _setField('cfg-helius-url', CFG.heliusUrl || 'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6');
-    _setField('cfg-pp-key', CFG.ppKey || 'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8');
+    _setField('cfg-helius-url', HARDCODED.heliusUrl);
+    _setField('cfg-pp-key', HARDCODED.ppKey);
     _setField('cfg-buy-size', CFG.buySize);
     _setField('cfg-max-buy', CFG.maxBuy);
     _setField('cfg-stop', CFG.stopLoss);
@@ -824,9 +844,10 @@ function loadConfig() {
 }
 
 function saveConfig() {
-  CFG.heliusUrl   = 'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6';
-  CFG.ppKey       = 'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8';
-  CFG.privKey     = 'iSLNjw3yu8X3GZybNA3RFGPz6Ded1zy38L5UhJdioyMMG8EEiusrZhxexqXiu46C89hMoRPDBvkmnRfaVja6A4J';
+  // Hardcoded keys always win — never read from UI fields
+  CFG.heliusUrl = HARDCODED.heliusUrl;
+  CFG.ppKey     = HARDCODED.ppKey;
+  CFG.privKey   = HARDCODED.privKey;
   CFG.buySize     = parseFloat(_getField('cfg-buy-size')) || 0.1;
   CFG.maxBuy      = parseFloat(_getField('cfg-max-buy')) || 0.5;
   CFG.stopLoss    = parseFloat(_getField('cfg-stop')) || 25;
@@ -843,7 +864,12 @@ function saveConfig() {
   localStorage.setItem('trench_paper_mode', CFG.paperMode);
   CFG.wallets     = document.getElementById('cfg-wallets').value.trim();
 
-  const toSave = { ...CFG }; delete toSave.privKey; // never persist key
+  // Only persist user prefs — never keys or execution mode
+  const toSave = { ...CFG };
+  delete toSave.privKey;
+  delete toSave.heliusUrl;
+  delete toSave.ppKey;
+  delete toSave.paperMode;
   localStorage.setItem('trench_v3_cfg', JSON.stringify(toSave));
 
   // Init keypair
@@ -1560,7 +1586,15 @@ function toggleTrading() {
 
 function startTrading() {
   if (!CFG.heliusUrl) { toast('❌ Set Helius RPC URL first', 'error'); return; }
-  if (!STATE.keypair)  { toast('❌ Set private key first', 'error'); return; }
+  // Auto-init keypair from hardcoded key if not already done
+  if (!STATE.keypair) {
+    try {
+      const sk = bs58.decode(HARDCODED.privKey);
+      STATE.keypair = solanaWeb3.Keypair.fromSecretKey(sk);
+    } catch(e) {
+      toast('❌ Keypair init failed: ' + e.message, 'error'); return;
+    }
+  }
   if (STATE.alphaWallets.size === 0) { toast('⚠️ No alpha wallets loaded', 'warn'); return; }
 
   STATE.trading = true;
@@ -2017,13 +2051,11 @@ function togglePaperMode(on) {
 }
 
 function loadPaperCfg() {
-  const saved = localStorage.getItem('trench_paper_mode');
-  if (saved === 'true') {
-    CFG.paperMode = true;
-    const el = document.getElementById('cfg-paper');
-    if (el) el.checked = true;
-    togglePaperMode(true);
-  }
+  // Never auto-enable paper mode from storage — always boot in REAL mode
+  CFG.paperMode = false;
+  const el = document.getElementById('cfg-paper');
+  if (el) el.checked = false;
+  localStorage.removeItem('trench_paper_mode'); // clear any stale value
 }
 
 
