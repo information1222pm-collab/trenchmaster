@@ -396,10 +396,6 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
       <div class="ssec">
         <div class="sgrp">
           <div class="sgt">EXIT THRESHOLDS</div>
-          <div class="srow"><div><div class="slbl">Take Profit</div><div class="ssub">Close at gain from entry</div></div><div class="sinp"><button class="sbtn" onclick="adj('tp',-5)">-</button><span class="sval" id="sv-tp">30%</span><button class="sbtn" onclick="adj('tp',+5)">+</button></div></div>
-          <div class="srow"><div><div class="slbl">Hard Stop</div><div class="ssub">Close at loss from entry</div></div><div class="sinp"><button class="sbtn" onclick="adj('sl',-1)">-</button><span class="sval" id="sv-sl">10%</span><button class="sbtn" onclick="adj('sl',+1)">+</button></div></div>
-          <div class="srow"><div><div class="slbl">Trailing Stop</div><div class="ssub">Close at drawdown from peak (activates after +2%)</div></div><div class="sinp"><button class="sbtn" onclick="adj('trail',-1)">-</button><span class="sval" id="sv-trail">5%</span><button class="sbtn" onclick="adj('trail',+1)">+</button></div></div>
-          <div class="srow"><div><div class="slbl">Timeout</div><div class="ssub">Force close after N seconds</div></div><div class="sinp"><button class="sbtn" onclick="adj('timeout',-5)">-</button><span class="sval" id="sv-to">30s</span><button class="sbtn" onclick="adj('timeout',+5)">+</button></div></div>
         </div>
         <div class="sgrp">
           <div class="sgt">POSITION SIZING</div>
@@ -567,7 +563,7 @@ const WMAP={};WALLETS.forEach(w=>{WMAP[w.addr]=w});
 const ADDRS=WALLETS.map(w=>w.addr);
 
 // ── Config ────────────────────────────────────────────────────────
-const CFG={tp:30,sl:10,trail:5,timeout:30,size:50,minsize:5,res:10,cbLimit:5,daily:50,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true};
+const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:50,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true};
 function loadCfg(){try{const s=localStorage.getItem('mchpai_cfg');if(s)Object.assign(CFG,JSON.parse(s))}catch(e){}}
 function saveCfg(){
   CFG.jito=document.getElementById('t-jito')?.checked??true;
@@ -1072,23 +1068,13 @@ async function confirmPoller(){
 
 // ── Position monitor 250ms (mirrors Rust price_monitor.rs) ────────
 function posMonitor(){
+  // Pure copy trading — no auto-exits.
+  // Only exit triggers: alpha wallet mirror sell, or manual CLOSE ALL.
+  // posMonitor only tracks price for display purposes.
   for(const[mint,pos]of Object.entries(S.positions)){
-    // Gate 1: Need a real entry price from subscribeTokenTrade (not estimated)
-    if(!pos.entryPrice||pos.entryPrice===0)continue;
-    // Gate 2: Require at least 2 real price ticks before any stop fires
-    // Prevents instant exits on first noisy tick
-    if((pos.priceTickCount||0)<2)continue;
-    // Gate 3: Minimum 5s hold — stops latency-spike false exits
-    const held=(Date.now()-pos.entryTime)/1000;
-    if(held<5)continue;
-
-    const pnlPct=((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100;
-    const dd=pos.highPrice>0?((pos.currentPrice-pos.highPrice)/pos.highPrice)*100:0;
-
-    if(pnlPct>=CFG.tp){doSell(mint,'take_profit_'+pnlPct.toFixed(0)+'pct');continue;}
-    if(pnlPct<=-CFG.sl){doSell(mint,'hard_stop_'+pnlPct.toFixed(0)+'pct');continue;}
-    if(pnlPct>2&&dd<=-CFG.trail){doSell(mint,'trail_stop_draw'+dd.toFixed(0)+'pct');continue;}
-    if(held>CFG.timeout){doSell(mint,'timeout_'+CFG.timeout+'s');continue;}
+    if(!pos.currentPrice||!pos.entryPrice)continue;
+    // Keep highPrice updated for display
+    if(pos.currentPrice>pos.highPrice)pos.highPrice=pos.currentPrice;
   }
 }
 
@@ -1262,11 +1248,11 @@ function tab(name,btn){
 function wf(f,btn){S.wFilter=f;document.querySelectorAll('.wfb').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderWallets();}
 
 // ── Settings adj ──────────────────────────────────────────────────
-const _adj={tp:[5,200,'tp','%'],sl:[1,50,'sl','%'],trail:[1,30,'trail','%'],timeout:[5,120,'timeout','s'],
+const _adj={
   size:[1,500,'size','sol'],minsize:[1,100,'minsize','sol'],res:[1,100,'res','sol'],
   cb:[1,20,'cbLimit',''],daily:[5,200,'daily',''],maxpos:[1,20,'maxpos',''],tip:[100000,5000000,'tipLamports','k']};
-const _ids={tp:'sv-tp',sl:'sv-sl',trail:'sv-trail',timeout:'sv-to',size:'sv-sz',minsize:'sv-mn',res:'sv-rs',cb:'sv-cb',daily:'sv-dl',maxpos:'sv-mp',tip:'sv-tip'};
-const _fmt={tp:v=>v+'%',sl:v=>v+'%',trail:v=>v+'%',timeout:v=>v+'s',size:v=>(v/100).toFixed(2)+'◎',minsize:v=>(v/100).toFixed(2)+'◎',res:v=>(v/100).toFixed(2)+'◎',cb:v=>''+v,daily:v=>''+v,maxpos:v=>''+v,tip:v=>Math.round(v/1000)+'k'};
+const _ids={size:'sv-sz',minsize:'sv-mn',res:'sv-rs',cb:'sv-cb',daily:'sv-dl',maxpos:'sv-mp',tip:'sv-tip'};
+const _fmt={size:v=>(v/100).toFixed(2)+'◎',minsize:v=>(v/100).toFixed(2)+'◎',res:v=>(v/100).toFixed(2)+'◎',cb:v=>''+v,daily:v=>''+v,maxpos:v=>''+v,tip:v=>Math.round(v/1000)+'k'};
 function adj(k,d){
   const[mn,mx,ck]=_adj[k];
   CFG[ck]=Math.max(mn,Math.min(mx,CFG[ck]+d));
