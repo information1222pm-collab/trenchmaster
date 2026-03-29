@@ -50,7 +50,7 @@ const HC = {
   helius:    'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6',
   ppKey:     'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8',
   jito:      'https://ny.mainnet.block-engine.jito.wtf',
-  paper:     false,  // false = real trades, true = simulate only
+  paper:     true,   // true = paper mode ON by default
 };
 
 </script>
@@ -294,7 +294,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
     <div class="hlogo"><span class="m">M</span><span class="c">C</span><span class="h">H</span>Pai</div>
     <div class="hright">
       <span class="hbal" id="h-bal">-.--- SOL</span>
-      <span class="hmode auto" id="h-mode">LIVE</span><span id="paper-badge" style="display:none;background:rgba(255,204,0,0.15);color:var(--hold);border:1px solid rgba(255,204,0,0.3);font-size:7px;padding:2px 6px;border-radius:3px;font-family:var(--mono);font-weight:700;letter-spacing:0.5px;margin-left:4px">📄PAPER</span><button id="paper-btn" onclick="togglePaper()" style="margin-left:6px;background:transparent;border:1px solid var(--wire2);color:var(--ink2);font-family:var(--mono);font-size:8px;padding:3px 8px;border-radius:3px;cursor:pointer;letter-spacing:0.5px">📄 PAPER: OFF</button>
+      <span class="hmode auto" id="h-mode">LIVE</span><span id="paper-badge" style="background:rgba(255,204,0,0.2);color:var(--hold);border:1px solid rgba(255,204,0,0.5);font-size:7px;padding:2px 6px;border-radius:3px;font-family:var(--mono);font-weight:700;letter-spacing:0.5px;margin-left:4px">📄PAPER</span><button id="paper-btn" onclick="togglePaper()" style="margin-left:6px;background:rgba(255,204,0,0.18);border:1px solid var(--hold);color:var(--hold);font-family:var(--mono);font-size:8px;padding:3px 8px;border-radius:3px;cursor:pointer;letter-spacing:0.5px">📄 PAPER: ON</button><span id="paper-trade-count" data-n="0" style="margin-left:4px;font-size:9px;color:var(--hold)"></span>
       <div class="wsbdg dead" id="wsbdg"><div class="wsdot"></div><span id="wslbl">OFF</span></div>
     </div>
   </div>
@@ -702,7 +702,7 @@ async function autoLaunch() {
   }
 
   // Paper mode from HC config — set immediately
-  S.paper = (HC.paper === true);
+  S.paper = true; // always start in paper mode
 
   // Load user prefs (sizes, stops) but strip any sensitive keys
   try {
@@ -739,15 +739,17 @@ async function autoLaunch() {
 }
 
 function updatePaperBadge() {
-  const badge = document.getElementById('paper-badge');
+  const badge  = document.getElementById('paper-badge');
+  const btn    = document.getElementById('paper-btn');
   const modeEl = document.getElementById('h-mode');
-  if (!badge) return;
   if (S.paper) {
-    badge.style.display = 'inline-block';
-    if (modeEl) { modeEl.textContent = 'PAPER'; modeEl.className = 'hmode auto'; modeEl.style.background='rgba(255,204,0,0.15)'; modeEl.style.color='var(--hold)'; modeEl.style.borderColor='rgba(255,204,0,0.3)'; }
+    if (badge) { badge.style.display='inline-block'; badge.style.opacity='1'; }
+    if (btn)   { btn.textContent='📄 PAPER: ON'; btn.style.background='rgba(255,204,0,0.18)'; btn.style.borderColor='var(--hold)'; btn.style.color='var(--hold)'; }
+    if (modeEl){ modeEl.textContent='PAPER'; modeEl.style.color='var(--hold)'; }
   } else {
-    badge.style.display = 'none';
-    if (modeEl) { modeEl.textContent = 'LIVE'; modeEl.className = 'hmode auto'; modeEl.style.background=''; modeEl.style.color=''; modeEl.style.borderColor=''; }
+    if (badge) { badge.style.display='none'; }
+    if (btn)   { btn.textContent='💸 LIVE: ON'; btn.style.background='rgba(0,255,170,0.1)'; btn.style.borderColor='var(--go)'; btn.style.color='var(--go)'; }
+    if (modeEl){ modeEl.textContent='LIVE'; modeEl.style.color='var(--go)'; }
   }
 }
 
@@ -815,7 +817,8 @@ async function launch(){
 // ── PumpPortal WebSocket ──────────────────────────────────────────
 function initWS(){
   if(S.ws){try{S.ws.close()}catch(e){}}
-  S.ws=new WebSocket('wss://pumpportal.fun/api/data');
+  const wsUrl='wss://pumpportal.fun/api/data'+(HC.ppKey?'?api-key='+HC.ppKey:'');
+  S.ws=new WebSocket(wsUrl);
   S.ws.onopen=()=>{
     setBadge(true);
     // Single subscribe call for all 77 wallets
@@ -876,7 +879,7 @@ async function onMsg(m){
   S.latDetect.push(performance.now()-rAt);
   if(S.latDetect.length>500)S.latDetect.shift();
 
-  addFeed('buy','📡 W#'+w.rank+'['+w.tier+'] BUY '+sym,(m.solAmount||0).toFixed(3)+'◎');
+  addFeed('buy','📡'+(S.paper?'📄':' ')+'W#'+w.rank+'['+w.tier+'] '+sym,(m.solAmount||0).toFixed(3)+'◎ '+(S.paper?'→PAPER':'→LIVE'));
   flashW(w.rank);
   if(!canTrade(mint))return;
   await doBuy(mint,sym,w,m.solAmount||0,m.tokenAmount||0,rAt);
@@ -900,26 +903,29 @@ function canTrade(mint){
 // ── Execute Buy ───────────────────────────────────────────────────
 async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const t0=performance.now();
-  const dec=await decide(w,solAmt*1e9,tokAmt,mint);
-  if(!dec.go){addFeed('info','⏭ SKIP '+sym+' — '+dec.reason,'W#'+w.rank);return;}
-  const sz=dec.sizeLamports/1e9;
 
-  // ── PAPER MODE ─────────────────────────────────────────────────
+  // ── PAPER MODE — runs BEFORE decide()/ML, no balance needed ────
   if(S.paper){
     const lat=Math.round(performance.now()-t0);
-    const paperSz = sz > 0 ? sz : (CFG.size/100) || 0.1; // fallback if Kelly returns 0
+    const paperSz=(CFG.size/100)||0.1;
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
       sizeSol:paperSz,entryTime:Date.now(),
       entryPrice:0,currentPrice:0,highPrice:0,priceTickCount:0,
-      sig:'PAPER_'+mint.slice(0,8),conf:dec.conf,status:'paper'};
+      sig:'PAPER_'+mint.slice(0,8),conf:1.0,status:'paper'};
     S.risk.daily++;
     if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
     S.wstats[w.rank].copies++;
     if(S.ws?.readyState===1)S.ws.send(JSON.stringify({method:'subscribeTokenTrade',keys:[mint]}));
+    const pb=document.getElementById('paper-trade-count');
+    if(pb)pb.textContent='📄'+(parseInt(pb.dataset.n||0)+1);if(pb)pb.dataset.n=(parseInt(pb.dataset.n||0)+1);
     toast('📄 PAPER BUY '+sym+' '+paperSz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+']','trade');
-    addFeed('buy','📄 PAPER BUY '+sym,paperSz.toFixed(3)+'◎ conf='+dec.conf.toFixed(2)+' W#'+w.rank+' '+lat+'ms');
+    addFeed('buy','📄 PAPER BUY '+sym,paperSz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+'] '+lat+'ms');
     return;
   }
+  // ── LIVE MODE — runs decide()/ML before executing ──────────────
+  const dec=await decide(w,solAmt*1e9,tokAmt,mint);
+  if(!dec.go){addFeed('info','⏭ SKIP '+sym+' — '+dec.reason,'W#'+w.rank);return;}
+  const sz=dec.sizeLamports/1e9;
   // ── LIVE MODE ──────────────────────────────────────────────────
 
   addFeed('buy','🚀 BUY '+sym,sz.toFixed(3)+'◎ conf='+dec.conf.toFixed(2)+' W#'+w.rank+'['+w.tier+']');
