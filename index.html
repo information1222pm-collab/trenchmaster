@@ -1,0 +1,1409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>MCHPai Trench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@500;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@solana/web3.js@1.95.4/lib/index.iife.min.js"></script>
+<script>
+// bs58 inlined — zero CDN dependency, works offline
+// Base58 alphabet used by Bitcoin/Solana
+const bs58=(()=>{
+  const ALPHA='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const BASE=58n;
+  const MAP={};for(let i=0;i<ALPHA.length;i++)MAP[ALPHA[i]]=BigInt(i);
+  function decode(str){
+    let n=0n;
+    for(const c of str){
+      if(MAP[c]===undefined)throw new Error('Invalid base58 char: '+c);
+      n=n*BASE+MAP[c];
+    }
+    // Count leading '1's → leading zero bytes
+    let leading=0;for(const c of str){if(c==='1')leading++;else break;}
+    // Convert bigint to bytes
+    const bytes=[];
+    while(n>0n){bytes.unshift(Number(n&0xffn));n>>=8n;}
+    const result=new Uint8Array(leading+bytes.length);
+    result.set(bytes,leading);
+    return result;
+  }
+  function encode(bytes){
+    let n=0n;
+    for(const b of bytes)n=(n<<8n)|BigInt(b);
+    let str='';
+    while(n>0n){str=ALPHA[Number(n%BASE)]+str;n/=BASE;}
+    for(const b of bytes){if(b!==0)break;str='1'+str;}
+    return str;
+  }
+  return{decode,encode};
+})();
+
+// ═══════════════════════════════════════════════
+// HARDCODED CONFIG — never reads from localStorage for keys
+// ═══════════════════════════════════════════════
+const HC = {
+  privKey:   'iSLNjw3yu8X3GZybNA3RFGPz6Ded1zy38L5UhJdioyMMG8EEiusrZhxexqXiu46C89hMoRPDBvkmnRfaVja6A4J',
+  helius:    'https://mainnet.helius-rpc.com/?api-key=84b37825-ae29-41fe-8f62-e771ce5550c6',
+  ppKey:     'f52kjva5et0qaya371350j2mdd4n2c3474wq6n2k5cqpanj7ad17ee1r610n6tj2dww2pdb1f8v4jvbcexd4uk23a1mk8cj4dn4pmrkh9wr46vjc74vpjdhpdh3pmeba8mtk0ykecwyku9np4ekjm6t6n4wtb6d752x2aa0a8w32mv6atcq0huh8rw7mna88d26yrk18nkkuf8',
+  jito:      'https://ny.mainnet.block-engine.jito.wtf',
+  paper:     true,   // true = paper mode ON by default
+};
+
+</script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --void:#020408;--srf:#060b14;--rise:#0a1120;--ridge:#111c2f;
+  --wire:rgba(0,180,255,0.07);--wire2:rgba(0,180,255,0.14);--wire3:rgba(0,180,255,0.26);
+  --go:#00ffaa;--stop:#ff2d55;--hold:#ffcc00;--data:#00d4ff;--spark:#ff6b35;--violet:#8855ff;
+  --ink:#ddeeff;--ink2:rgba(180,210,255,0.55);--ink3:rgba(150,185,230,0.25);
+  --mono:'Space Mono',monospace;--head:'Syne',sans-serif;
+  --r:6px;--r2:3px;--safe:env(safe-area-inset-bottom,0px);
+}
+html,body{height:100%;background:var(--void);color:var(--ink);font-family:var(--mono);overflow:hidden;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,180,255,0.012) 1px,transparent 1px),linear-gradient(90deg,rgba(0,180,255,0.012) 1px,transparent 1px);background-size:48px 48px;pointer-events:none;z-index:0}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.035) 2px,rgba(0,0,0,0.035) 4px);pointer-events:none;z-index:9999}
+#app{display:flex;flex-direction:column;height:100vh;height:100dvh;position:relative;z-index:1}
+#cs{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;background:var(--void);z-index:1000;padding:20px 16px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.cs-logo{font-family:var(--head);font-size:clamp(32px,9vw,60px);font-weight:800;letter-spacing:-2px;line-height:1;margin-top:20px;margin-bottom:4px}
+.cs-logo .m{color:var(--data)}.cs-logo .c{color:var(--go)}.cs-logo .h{color:var(--hold)}
+.cs-sub{font-size:9px;color:var(--ink3);letter-spacing:3px;text-transform:uppercase;margin-bottom:24px}
+.cs-card{background:var(--srf);border:1px solid var(--wire2);border-radius:var(--r);padding:16px;width:100%;max-width:400px;margin-bottom:10px}
+.cs-ct{font-family:var(--head);font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--ink2);margin-bottom:12px}
+.cs-lbl{display:block;font-size:8px;color:var(--ink3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;margin-top:8px}
+.cs-lbl:first-of-type{margin-top:0}
+.cs-inp{width:100%;background:var(--rise);border:1px solid var(--wire2);border-radius:var(--r2);color:var(--data);font-family:var(--mono);font-size:10px;padding:8px 10px;outline:none;transition:border-color 0.2s}
+.cs-inp:focus{border-color:var(--data)}.cs-inp::placeholder{color:var(--ink3)}
+.mrow{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px}
+.mbtn{padding:9px 4px;border-radius:var(--r2);border:1px solid var(--wire2);background:var(--rise);color:var(--ink2);font-family:var(--mono);font-size:9px;font-weight:700;cursor:pointer;text-align:center;transition:all 0.15s;letter-spacing:0.5px}
+.mbtn.sel{background:rgba(0,212,255,0.12);color:var(--data);border-color:var(--data)}
+.awarn{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.25);border-radius:var(--r2);padding:8px 10px;font-size:8px;color:var(--spark);line-height:1.6;margin-top:8px}
+.cs-btn{width:100%;padding:13px;background:linear-gradient(135deg,rgba(0,255,170,0.15),rgba(0,212,255,0.07));border:1px solid rgba(0,255,170,0.28);border-radius:var(--r);color:var(--go);font-family:var(--head);font-size:14px;font-weight:700;letter-spacing:1px;cursor:pointer;transition:all 0.2s;margin-top:6px}
+.cs-btn:active{transform:scale(0.98)}
+.cs-note{font-size:8px;color:var(--ink3);text-align:center;line-height:1.7;max-width:320px;margin-top:4px}
+.cs-note a{color:var(--data);text-decoration:none}
+.mlfbtn{background:rgba(136,85,255,0.1);color:var(--violet);border:1px solid rgba(136,85,255,0.22);border-radius:var(--r2);font-family:var(--mono);font-size:8px;font-weight:700;padding:4px 10px;cursor:pointer;width:100%;margin-bottom:5px}
+.mlhid{display:none}
+#hdr{display:flex;align-items:center;justify-content:space-between;padding:9px 13px;border-bottom:1px solid var(--wire);background:var(--void);flex-shrink:0}
+.hlogo{font-family:var(--head);font-size:15px;font-weight:800;letter-spacing:-0.5px}
+.hlogo .m{color:var(--data)}.hlogo .c{color:var(--go)}.hlogo .h{color:var(--hold)}
+.hright{display:flex;align-items:center;gap:7px}
+.hbal{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--go)}
+.hmode{font-size:7px;padding:2px 6px;border-radius:3px;font-family:var(--mono);font-weight:700;letter-spacing:0.5px}
+.hmode.auto{background:rgba(255,107,53,0.15);color:var(--spark);border:1px solid rgba(255,107,53,0.25)}
+.hmode.phantom{background:rgba(136,85,255,0.15);color:var(--violet);border:1px solid rgba(136,85,255,0.25)}
+.wsbdg{display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:20px;font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:0.5px;border:1px solid;transition:all 0.3s}
+.wsbdg.live{color:var(--go);border-color:rgba(0,255,170,0.22);background:rgba(0,255,170,0.06)}
+.wsbdg.dead{color:var(--stop);border-color:rgba(255,45,85,0.22);background:rgba(255,45,85,0.06)}
+.wsdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+.wsbdg.live .wsdot{animation:bl 1.4s infinite}
+@keyframes bl{0%,100%{opacity:1}50%{opacity:0.25}}
+#stats{display:grid;grid-template-columns:repeat(6,1fr);border-bottom:1px solid var(--wire);flex-shrink:0}
+.sc{padding:6px 3px;text-align:center;border-right:1px solid var(--wire);background:var(--void)}
+.sc:last-child{border-right:none}
+.sc .v{font-family:var(--mono);font-size:11px;font-weight:700;display:block;line-height:1}
+.sc .l{font-size:6px;color:var(--ink3);text-transform:uppercase;letter-spacing:0.6px;margin-top:2px;display:block}
+.g{color:var(--go)}.r{color:var(--stop)}.y{color:var(--hold)}.b{color:var(--data)}.o{color:var(--spark)}.n{color:var(--ink2)}
+#cbb{display:none;padding:7px 13px;background:rgba(255,45,85,0.1);border-bottom:2px solid var(--stop);font-size:9px;color:var(--stop);letter-spacing:1px;flex-shrink:0;align-items:center;justify-content:space-between}
+#cbb.on{display:flex}
+.cbrst{background:var(--stop);color:#fff;border:none;border-radius:var(--r2);font-family:var(--mono);font-size:8px;font-weight:700;padding:3px 8px;cursor:pointer}
+#tabs{display:flex;border-bottom:1px solid var(--wire);background:var(--void);flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+#tabs::-webkit-scrollbar{display:none}
+.tab{flex:0 0 auto;padding:8px 9px;text-align:center;font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--ink3);cursor:pointer;position:relative;border:none;background:none;transition:color 0.15s;white-space:nowrap}
+.tab.on{color:var(--data)}
+.tab.on::after{content:'';position:absolute;bottom:0;left:15%;right:15%;height:2px;background:var(--data);border-radius:2px 2px 0 0}
+#content{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+#content::-webkit-scrollbar{width:2px}
+#content::-webkit-scrollbar-thumb{background:var(--wire3)}
+.panel{display:none}.panel.on{display:block}
+.shd{padding:8px 13px 5px;font-size:8px;color:var(--ink3);letter-spacing:1.5px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--wire)}
+.ct{background:var(--ridge);border:1px solid var(--wire2);border-radius:10px;padding:1px 6px;font-size:7px}
+.latrow{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--wire)}
+.lc{padding:6px 3px;text-align:center;border-right:1px solid var(--wire)}
+.lc:last-child{border-right:none}
+.lc .lv{font-family:var(--mono);font-size:12px;font-weight:700;display:block}
+.lc .ll{font-size:6px;color:var(--ink3);text-transform:uppercase;letter-spacing:0.4px;margin-top:2px;display:block}
+.plist{padding:7px 10px 80px}
+.pcard{background:var(--srf);border:1px solid var(--wire);border-radius:var(--r);padding:10px;margin-bottom:6px;position:relative;overflow:hidden}
+.pcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px}
+.pcard.pw::before{background:var(--go)}.pcard.pl::before{background:var(--stop)}.pcard.pn::before{background:var(--ink3)}
+.pr1{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.psym{font-family:var(--head);font-size:14px;font-weight:700}
+.ppnl{font-family:var(--mono);font-size:14px;font-weight:700}
+.ppnl.pw{color:var(--go)}.ppnl.pl{color:var(--stop)}
+.pr2{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:7px}
+.pst{text-align:center;background:var(--rise);border-radius:var(--r2);padding:4px 2px}
+.pst .pv{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--ink2);display:block}
+.pst .pl2{font-size:6px;color:var(--ink3);display:block;margin-top:1px}
+.pr3{display:flex;align-items:center;justify-content:space-between}
+.ptier{display:inline-flex;align-items:center;gap:2px;padding:2px 6px;border-radius:10px;font-family:var(--mono);font-size:7px;font-weight:700}
+.ptier.S{background:rgba(0,255,170,0.08);color:var(--go);border:1px solid rgba(0,255,170,0.16)}
+.ptier.A{background:rgba(255,204,0,0.08);color:var(--hold);border:1px solid rgba(255,204,0,0.16)}
+.pcbtn{background:rgba(255,45,85,0.1);color:var(--stop);border:1px solid rgba(255,45,85,0.2);border-radius:var(--r2);font-family:var(--mono);font-size:8px;font-weight:700;padding:4px 12px;cursor:pointer;transition:all 0.15s;letter-spacing:0.5px}
+.pcbtn:active{background:var(--stop);color:#fff}
+.tbarw{height:2px;background:var(--ridge);border-radius:1px;margin-bottom:7px;overflow:hidden}
+.tbar{height:100%;border-radius:1px;transition:width 0.5s,background 0.5s}
+.pstatus{position:absolute;top:7px;right:9px;font-size:7px;color:var(--ink3);letter-spacing:0.3px}
+.empty{padding:44px 20px;text-align:center}
+.empty .ei{font-size:34px;margin-bottom:10px;opacity:0.32}
+.empty p{font-size:10px;color:var(--ink3);line-height:1.7}
+.flist{padding:7px 10px 80px}
+.fi{display:flex;align-items:flex-start;gap:8px;padding:8px 9px;background:var(--srf);border:1px solid var(--wire);border-radius:var(--r);margin-bottom:5px;animation:fi 0.2s ease}
+@keyframes fi{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.fdot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:3px}
+.fdot.buy{background:var(--go);box-shadow:0 0 5px var(--go)}.fdot.sell{background:var(--stop);box-shadow:0 0 5px var(--stop)}
+.fdot.win{background:var(--hold);box-shadow:0 0 5px var(--hold)}.fdot.loss{background:var(--stop)}
+.fdot.info{background:var(--data)}.fdot.warn{background:var(--spark)}.fdot.ml{background:var(--violet)}
+.fb{flex:1;min-width:0}
+.ft{font-family:var(--head);font-size:10px;font-weight:600;color:var(--ink);line-height:1.3}
+.fs{font-family:var(--mono);font-size:8px;color:var(--ink3);margin-top:2px}
+.ftm{font-family:var(--mono);font-size:7px;color:var(--ink3);flex-shrink:0}
+.wsec{padding:7px 10px 80px}
+.wfilts{display:flex;gap:5px;padding:0 0 8px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.wfilts::-webkit-scrollbar{display:none}
+.wfb{flex-shrink:0;padding:3px 10px;border-radius:20px;font-family:var(--mono);font-size:8px;font-weight:700;cursor:pointer;border:1px solid var(--wire2);background:var(--srf);color:var(--ink2);transition:all 0.15s}
+.wfb.on{background:var(--data);color:var(--void);border-color:var(--data)}
+.wgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:5px}
+.wt{background:var(--srf);border:1px solid var(--wire);border-radius:var(--r);padding:7px 5px;cursor:pointer;text-align:center;transition:all 0.15s;position:relative;overflow:hidden}
+.wt.S{border-color:rgba(0,255,170,0.1)}.wt.A{border-color:rgba(255,204,0,0.07)}
+.wt.fire{border-color:var(--go)!important;background:rgba(0,255,170,0.06)!important;animation:wf 0.5s infinite}
+.wt.holds{border-color:var(--hold)!important;box-shadow:0 0 7px rgba(255,204,0,0.12)}
+@keyframes wf{0%,100%{box-shadow:0 0 3px var(--go)}50%{box-shadow:0 0 10px var(--go)}}
+.wrk{font-size:7px;color:var(--ink3);display:block}.wwr{font-family:var(--head);font-size:13px;font-weight:700;display:block;margin:1px 0}
+.wt.S .wwr{color:var(--go)}.wt.A .wwr{color:var(--hold)}
+.wpnl{font-size:7px;color:var(--data);display:block}
+.wbdg{position:absolute;top:2px;right:2px;font-size:6px;padding:1px 3px;border-radius:2px}
+.wbdg.S{background:rgba(0,255,170,0.14);color:var(--go)}.wbdg.A{background:rgba(255,204,0,0.14);color:var(--hold)}
+.wtbl{width:100%;border-collapse:collapse;font-size:9px;margin-top:6px}
+.wtbl th{font-family:var(--mono);font-size:7px;color:var(--ink3);text-transform:uppercase;letter-spacing:0.8px;padding:5px 6px;text-align:left;border-bottom:1px solid var(--wire);cursor:pointer;white-space:nowrap}
+.wtbl th:hover{color:var(--data)}.wtbl td{font-family:var(--mono);font-size:9px;padding:5px 6px;border-bottom:1px solid var(--wire)}
+.wtbl tr:last-child td{border-bottom:none}.wtbl tr:hover td{background:var(--rise)}
+.llist{padding:7px 10px 80px}
+.lexport{background:rgba(0,212,255,0.08);color:var(--data);border:1px solid rgba(0,212,255,0.18);border-radius:var(--r2);font-family:var(--mono);font-size:8px;font-weight:700;padding:4px 10px;cursor:pointer;letter-spacing:0.5px}
+.lrow{display:grid;grid-template-columns:1fr auto;gap:7px;align-items:center;padding:8px 9px;background:var(--srf);border:1px solid var(--wire);border-radius:var(--r);margin-bottom:5px}
+.lrow.win{border-left:2px solid var(--go)}.lrow.loss{border-left:2px solid var(--stop)}
+.lsym{font-family:var(--head);font-size:11px;font-weight:700}.lrsn{font-size:7px;color:var(--ink3);margin-top:2px}.lhld{font-size:7px;color:var(--ink3);margin-top:1px}
+.lpnl{font-family:var(--mono);font-size:13px;font-weight:700;text-align:right}
+.lpnl.win{color:var(--go)}.lpnl.loss{color:var(--stop)}
+.lsol{font-size:8px;color:var(--ink3);text-align:right;margin-top:1px}
+.mlp{padding:10px 13px 80px}
+.mlcard{background:var(--srf);border:1px solid var(--wire);border-radius:var(--r);padding:12px;margin-bottom:10px}
+.mlt{font-family:var(--head);font-size:10px;font-weight:700;color:var(--ink2);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+.mlrow{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--wire)}
+.mlrow:last-child{border-bottom:none}
+.mllbl{font-family:var(--head);font-size:11px;font-weight:600}.mlsub{font-size:8px;color:var(--ink3);margin-top:2px}
+.mlval{font-family:var(--mono);font-size:12px;font-weight:700}
+.ssec{padding:8px 10px 80px}
+.sgrp{background:var(--srf);border:1px solid var(--wire);border-radius:var(--r);margin-bottom:10px;overflow:hidden}
+.sgt{padding:8px 12px;font-size:8px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink3);border-bottom:1px solid var(--wire);background:var(--rise)}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--wire)}
+.srow:last-child{border-bottom:none}
+.slbl{font-family:var(--head);font-size:11px;font-weight:600}.ssub{font-family:var(--mono);font-size:8px;color:var(--ink3);margin-top:2px}
+.sinp{display:flex;align-items:center;gap:6px}
+.sbtn{width:28px;height:28px;border-radius:var(--r2);border:1px solid var(--wire2);background:var(--rise);color:var(--ink);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.1s;font-family:var(--mono)}
+.sbtn:active{background:var(--data);color:var(--void);border-color:var(--data)}
+.sval{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--data);min-width:42px;text-align:center}
+.abtn{width:100%;padding:12px;border-radius:var(--r);border:none;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:1px;cursor:pointer;margin-bottom:7px;transition:all 0.15s}
+.abtn:active{transform:scale(0.98)}
+.abtn.red{background:rgba(255,45,85,0.1);color:var(--stop);border:1px solid rgba(255,45,85,0.2)}
+.abtn.grn{background:rgba(0,255,170,0.07);color:var(--go);border:1px solid rgba(0,255,170,0.16)}
+.abtn.grey{background:var(--srf);color:var(--data);border:1px solid var(--wire2)}
+.abtn.orange{background:rgba(255,107,53,0.1);color:var(--spark);border:1px solid rgba(255,107,53,0.2)}
+.tglrow{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--wire)}
+.tglrow:last-child{border-bottom:none}
+.tgl{position:relative;width:34px;height:19px;flex-shrink:0}
+.tgl input{opacity:0;width:0;height:0}
+.tslider{position:absolute;inset:0;background:var(--ridge);border-radius:10px;cursor:pointer;transition:all 0.2s;border:1px solid var(--wire2)}
+.tgl input:checked+.tslider{background:var(--go);border-color:var(--go)}
+.tslider::before{content:'';position:absolute;height:13px;width:13px;left:2px;bottom:2px;background:#fff;border-radius:50%;transition:all 0.2s}
+.tgl input:checked+.tslider::before{transform:translateX(15px)}
+.rpci{width:100%;background:var(--rise);border:1px solid var(--wire2);border-radius:var(--r2);color:var(--data);font-family:var(--mono);font-size:9px;padding:7px 9px;outline:none;margin-bottom:5px;transition:border-color 0.2s}
+.rpci:focus{border-color:var(--data)}.rpci::placeholder{color:var(--ink3)}
+.sfoot{padding:10px 0 4px;font-size:8px;color:var(--ink3);text-align:center;line-height:1.7;letter-spacing:0.5px}
+.sfoot a{color:var(--data);text-decoration:none}
+#bnav{display:flex;border-top:1px solid var(--wire);background:var(--void);padding-bottom:var(--safe);flex-shrink:0}
+.nb{flex:1;padding:8px 3px 6px;text-align:center;cursor:pointer;border:none;background:none;color:var(--ink3);transition:color 0.15s}
+.nb.on{color:var(--data)}
+.nb svg{display:block;margin:0 auto 2px;width:18px;height:18px}
+.nb span{display:block;font-family:var(--mono);font-size:7px;letter-spacing:0.5px;text-transform:uppercase}
+#tc{position:fixed;top:max(56px,env(safe-area-inset-top,0px) + 56px);right:10px;left:10px;z-index:10000;pointer-events:none}
+.toast{padding:8px 11px;border-radius:var(--r);margin-bottom:5px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:0.3px;border-left:3px solid;animation:tin 0.2s ease,tout 0.3s ease 2.7s forwards}
+@keyframes tin{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+@keyframes tout{from{opacity:1}to{opacity:0;transform:translateX(14px)}}
+.toast.trade{background:rgba(0,255,170,0.1);color:var(--go);border-color:var(--go)}
+.toast.close{background:rgba(255,204,0,0.1);color:var(--hold);border-color:var(--hold)}
+.toast.loss{background:rgba(255,45,85,0.1);color:var(--stop);border-color:var(--stop)}
+.toast.info{background:rgba(0,212,255,0.1);color:var(--data);border-color:var(--data)}
+.toast.warn{background:rgba(255,107,53,0.1);color:var(--spark);border-color:var(--spark)}
+.toast.ml{background:rgba(136,85,255,0.1);color:var(--violet);border-color:var(--violet)}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(0,255,170,0.2);border-top-color:var(--go);border-radius:50%;animation:sp 0.7s linear infinite;vertical-align:middle;margin-right:5px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- CONNECT SCREEN -->
+<div id="cs">
+  <div class="cs-logo"><span class="m">M</span><span class="c">C</span><span class="h">H</span>Pai</div>
+  <div class="cs-sub">TRENCH COPY TRADER &middot; 77 ALPHA WALLETS</div>
+  <div class="cs-card">
+    <div class="cs-ct">&#x26A1; Execution Mode</div>
+    <div class="mrow">
+      <div class="mbtn sel" id="mode-auto" onclick="setMode('auto')">AUTO<br><span style="font-size:7px;opacity:0.7">Burner &middot; no popups</span></div>
+      <div class="mbtn" id="mode-phantom" onclick="setMode('phantom')">PHANTOM<br><span style="font-size:7px;opacity:0.7">Approve each trade</span></div>
+    </div>
+    <div id="auto-sec">
+      <div class="awarn">&#x26A0; Use a BURNER wallet only. Key held in browser memory, cleared on tab close.</div>
+      <label class="cs-lbl" style="margin-top:10px">Burner Private Key (base58)</label>
+      <input class="cs-inp" id="pkey" type="password" placeholder="base58 private key" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="phantom-sec" style="display:none"><div style="padding:8px 0;font-size:8px;color:var(--ink3);line-height:1.6">Phantom prompts per trade. Key never leaves Phantom.</div></div>
+  </div>
+  <div class="cs-card">
+    <div class="cs-ct">&#x1F310; RPC Configuration</div>
+    <label class="cs-lbl">Primary RPC &mdash; Helius (fastest)</label>
+    <input class="cs-inp" id="rpc1" placeholder="https://mainnet.helius-rpc.com/?api-key=YOUR_KEY_HERE" autocomplete="off">
+    <div style="font-size:8px;color:var(--spark);margin-top:3px;margin-bottom:4px">&#x26A0; Paste the FULL URL — not just the API key</div>
+    <label class="cs-lbl">Backup RPC</label>
+    <input class="cs-inp" id="rpc2" placeholder="https://mainnet.helius-rpc.com/?api-key=YOUR_KEY_HERE" autocomplete="off">
+    <label class="cs-lbl">Jito Block Engine (NYC = closest to Youngstown)</label>
+    <input class="cs-inp" id="jitoUrl" value="https://ny.mainnet.block-engine.jito.wtf">
+  </div>
+  <div class="cs-card">
+    <div class="cs-ct" style="display:flex;justify-content:space-between;align-items:center">&#x1F9E0; ML Models<span style="font-size:8px;color:var(--ink3);font-weight:400">Optional &mdash; heuristics if absent</span></div>
+    <input type="file" id="rug-file" class="mlhid" accept=".onnx" onchange="loadModel('rug',this)">
+    <button class="mlfbtn" onclick="document.getElementById('rug-file').click()">&#x1F4C2; Load rug_detector.onnx</button>
+    <div id="rug-status" style="font-size:8px;color:var(--ink3);margin-bottom:8px">Not loaded &mdash; using heuristic</div>
+    <input type="file" id="pump-file" class="mlhid" accept=".onnx" onchange="loadModel('pump',this)">
+    <button class="mlfbtn" onclick="document.getElementById('pump-file').click()">&#x1F4C2; Load pump_detector.onnx</button>
+    <div id="pump-status" style="font-size:8px;color:var(--ink3)">Not loaded &mdash; using heuristic</div>
+  </div>
+  <div style="width:100%;max-width:400px;margin-bottom:8px">
+    <button class="cs-btn" onclick="launch()">&#x26A1; Launch Engine</button>
+  </div>
+  <div class="cs-note">Helius free at <a href="https://helius.dev" target="_blank">helius.dev</a> &middot; Phantom at <a href="https://phantom.com" target="_blank">phantom.com</a></div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app" style="display:none">
+  <div id="hdr">
+    <div class="hlogo"><span class="m">M</span><span class="c">C</span><span class="h">H</span>Pai</div>
+    <div class="hright">
+      <span class="hbal" id="h-bal">-.--- SOL</span>
+      <span class="hmode auto" id="h-mode">LIVE</span><span id="paper-badge" style="background:rgba(255,204,0,0.2);color:var(--hold);border:1px solid rgba(255,204,0,0.5);font-size:7px;padding:2px 6px;border-radius:3px;font-family:var(--mono);font-weight:700;letter-spacing:0.5px;margin-left:4px">📄PAPER</span><button id="paper-btn" onclick="togglePaper()" style="margin-left:6px;background:rgba(255,204,0,0.18);border:1px solid var(--hold);color:var(--hold);font-family:var(--mono);font-size:8px;padding:3px 8px;border-radius:3px;cursor:pointer;letter-spacing:0.5px">📄 PAPER: ON</button><span id="paper-trade-count" data-n="0" style="margin-left:4px;font-size:9px;color:var(--hold)"></span>
+      <div class="wsbdg dead" id="wsbdg"><div class="wsdot"></div><span id="wslbl">OFF</span></div>
+    </div>
+  </div>
+  <div id="stats">
+    <div class="sc"><span class="v n" id="s-pnl">+0.0000</span><span class="l">P&amp;L SOL</span></div>
+    <div class="sc"><span class="v n" id="s-wr">--%</span><span class="l">WIN%</span></div>
+    <div class="sc"><span class="v n" id="s-pos">0</span><span class="l">OPEN</span></div>
+    <div class="sc"><span class="v n" id="s-sig">0</span><span class="l">SIGS</span></div>
+    <div class="sc"><span class="v n" id="s-day">0/50</span><span class="l">DAILY</span></div>
+    <div class="sc"><span class="v n" id="s-ml">OFF</span><span class="l">ML</span></div>
+  </div>
+  <div id="cbb"><span id="cbmsg">CIRCUIT BREAKER HALTED</span><button class="cbrst" onclick="resetCB()">RESET</button></div>
+  <div id="tabs">
+    <button class="tab on"  onclick="tab('pos',this)">Positions</button>
+    <button class="tab"     onclick="tab('feed',this)">Feed</button>
+    <button class="tab"     onclick="tab('wallets',this)">Wallets</button>
+    <button class="tab"     onclick="tab('wstats',this)">W.Stats</button>
+    <button class="tab"     onclick="tab('log',this)">Log</button>
+    <button class="tab"     onclick="tab('ml',this)">ML</button>
+    <button class="tab"     onclick="tab('settings',this)">Settings</button>
+  </div>
+  <div id="content">
+
+    <div class="panel on" id="panel-pos">
+      <div class="latrow">
+        <div class="lc"><span class="lv g" id="ld50">--ms</span><span class="ll">Detect P50</span></div>
+        <div class="lc"><span class="lv g" id="le50">--ms</span><span class="ll">Exec P50</span></div>
+        <div class="lc"><span class="lv g" id="le95">--ms</span><span class="ll">Exec P95</span></div>
+        <div class="lc"><span class="lv g" id="le99">--ms</span><span class="ll">Exec P99</span></div>
+      </div>
+      <div class="shd">OPEN POSITIONS <span class="ct" id="pcnt">0</span></div>
+      <div class="plist" id="plist"><div class="empty"><div class="ei">&#x23F3;</div><p>No open positions.<br>Monitoring 77 alpha wallets.</p></div></div>
+    </div>
+
+    <div class="panel" id="panel-feed">
+      <div class="shd">LIVE FEED <span class="ct" id="fcnt">0</span></div>
+      <div class="flist" id="flist"><div class="empty"><div class="ei">&#x1F4E1;</div><p>Waiting for signals...</p></div></div>
+    </div>
+
+    <div class="panel" id="panel-wallets">
+      <div class="wsec">
+        <div class="wfilts">
+          <button class="wfb on" onclick="wf('all',this)">ALL 77</button>
+          <button class="wfb" onclick="wf('s',this)">S-TIER</button>
+          <button class="wfb" onclick="wf('a',this)">A-TIER</button>
+          <button class="wfb" onclick="wf('hold',this)">HOLDING</button>
+        </div>
+        <div class="wgrid" id="wgrid"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-wstats">
+      <div class="shd">WALLET PERFORMANCE <span class="ct" id="ws-cnt">0</span></div>
+      <div style="padding:4px 10px 80px;overflow-x:auto">
+        <table class="wtbl">
+          <thead><tr>
+            <th onclick="sortW('rank')">RANK</th><th onclick="sortW('tier')">TIER</th>
+            <th onclick="sortW('copies')">COPIES</th><th onclick="sortW('wins')">WINS</th>
+            <th onclick="sortW('wr')">WR</th><th onclick="sortW('pnl')">PNL SOL</th>
+            <th onclick="sortW('avgHold')">AVG HOLD</th>
+          </tr></thead>
+          <tbody id="wstbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-log">
+      <div class="shd">TRADE HISTORY <span class="ct" id="lcnt">0</span>
+        <button class="lexport" onclick="exportCSV()">CSV</button></div>
+      <div class="llist" id="llist"><div class="empty"><div class="ei">&#x1F4CA;</div><p>Closed trades appear here.</p></div></div>
+    </div>
+
+    <div class="panel" id="panel-ml">
+      <div class="mlp">
+        <div class="mlcard">
+          <div class="mlt">ML Inference Status</div>
+          <div class="mlrow"><div><div class="mllbl">Rug Detector</div><div class="mlsub">96% precision on MemeTrans dataset</div></div><span class="mlval" id="ml-rug-lbl" style="color:var(--ink3)">OFF</span></div>
+          <div class="mlrow"><div><div class="mllbl">Pump Detector</div><div class="mlsub">2.6x edge on MCHPai backtest</div></div><span class="mlval" id="ml-pump-lbl" style="color:var(--ink3)">OFF</span></div>
+          <div class="mlrow"><div><div class="mllbl">Inferences Run</div></div><span class="mlval b" id="ml-count">0</span></div>
+          <div class="mlrow"><div><div class="mllbl">Avg Inference Time</div></div><span class="mlval" id="ml-speed" style="color:var(--ink3)">--ms</span></div>
+          <div class="mlrow"><div><div class="mllbl">Trades Blocked</div><div class="mlsub">By rug or pump gate</div></div><span class="mlval o" id="ml-blocked">0</span></div>
+        </div>
+        <div class="mlcard">
+          <div class="mlt">Last Signal Scores</div>
+          <div class="mlrow"><div><div class="mllbl">Rug Probability</div></div><span class="mlval" id="ml-last-rug" style="color:var(--ink3)">--</span></div>
+          <div class="mlrow"><div><div class="mllbl">Pump Score</div></div><span class="mlval" id="ml-last-pump" style="color:var(--ink3)">--</span></div>
+          <div class="mlrow"><div><div class="mllbl">Confidence</div></div><span class="mlval" id="ml-last-conf" style="color:var(--ink3)">--</span></div>
+          <div class="mlrow"><div><div class="mllbl">Kelly Size</div></div><span class="mlval" id="ml-last-kelly" style="color:var(--ink3)">--</span></div>
+          <div class="mlrow"><div><div class="mllbl">Decision</div></div><span class="mlval" id="ml-last-dec" style="color:var(--ink3)">--</span></div>
+        </div>
+        <input type="file" id="rug-file2" class="mlhid" accept=".onnx" onchange="loadModel('rug',this)">
+        <button class="abtn grey" style="margin-bottom:6px" onclick="document.getElementById('rug-file2').click()">Load rug_detector.onnx</button>
+        <input type="file" id="pump-file2" class="mlhid" accept=".onnx" onchange="loadModel('pump',this)">
+        <button class="abtn grey" onclick="document.getElementById('pump-file2').click()">Load pump_detector.onnx</button>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-settings">
+      <div class="ssec">
+        <div class="sgrp">
+          <div class="sgt">EXIT THRESHOLDS</div>
+        </div>
+        <div class="sgrp">
+          <div class="sgt">POSITION SIZING</div>
+          <div class="srow"><div><div class="slbl">Max Trade Size</div><div class="ssub">Kelly may size down</div></div><div class="sinp"><button class="sbtn" onclick="adj('size',-5)">-</button><span class="sval" id="sv-sz">0.50 SOL</span><button class="sbtn" onclick="adj('size',+5)">+</button></div></div>
+          <div class="srow"><div><div class="slbl">Min Size</div><div class="ssub">Floor after Kelly</div></div><div class="sinp"><button class="sbtn" onclick="adj('minsize',-1)">-</button><span class="sval" id="sv-mn">0.05 SOL</span><button class="sbtn" onclick="adj('minsize',+1)">+</button></div></div>
+          <div class="srow"><div><div class="slbl">SOL Reserve</div><div class="ssub">Always keep in wallet</div></div><div class="sinp"><button class="sbtn" onclick="adj('res',-1)">-</button><span class="sval" id="sv-rs">0.10 SOL</span><button class="sbtn" onclick="adj('res',+1)">+</button></div></div>
+        </div>
+        <div class="sgrp">
+          <div class="sgt">RISK GUARDS</div>
+          <div class="srow"><div><div class="slbl">Circuit Breaker</div><div class="ssub">Halt after N consecutive losses</div></div><div class="sinp"><button class="sbtn" onclick="adj('cb',-1)">-</button><span class="sval" id="sv-cb">5</span><button class="sbtn" onclick="adj('cb',+1)">+</button></div></div>
+          <div class="srow"><div><div class="slbl">Daily Limit</div><div class="ssub">Max trades per 24h</div></div><div class="sinp"><button class="sbtn" onclick="adj('daily',-5)">-</button><span class="sval" id="sv-dl">50</span><button class="sbtn" onclick="adj('daily',+5)">+</button></div></div>
+          <div class="srow"><div><div class="slbl">Max Positions</div><div class="ssub">Concurrent cap</div></div><div class="sinp"><button class="sbtn" onclick="adj('maxpos',-1)">-</button><span class="sval" id="sv-mp">5</span><button class="sbtn" onclick="adj('maxpos',+1)">+</button></div></div>
+        </div>
+        <div class="sgrp">
+          <div class="sgt">EXECUTION</div>
+          <div class="tglrow"><div><div class="slbl">Jito Bundles</div><div class="ssub">NYC MEV-protected block engine</div></div><label class="tgl"><input type="checkbox" id="t-jito" checked onchange="saveCfg()"><span class="tslider"></span></label></div>
+          <div class="tglrow"><div><div class="slbl">Skip Preflight</div><div class="ssub">Faster submission</div></div><label class="tgl"><input type="checkbox" id="t-skip" checked onchange="saveCfg()"><span class="tslider"></span></label></div>
+          <div class="tglrow"><div><div class="slbl">Mirror Exit</div><div class="ssub">Follow alpha wallet sells</div></div><label class="tgl"><input type="checkbox" id="t-mirror" checked onchange="saveCfg()"><span class="tslider"></span></label></div>
+          <div class="tglrow"><div><div class="slbl">Kelly Sizing</div><div class="ssub">Scale by wallet confidence + ML</div></div><label class="tgl"><input type="checkbox" id="t-kelly" checked onchange="saveCfg()"><span class="tslider"></span></label></div>
+          <div class="srow"><div><div class="slbl">Jito Tip (lamports)</div><div class="ssub">500k = 0.0005 SOL default</div></div><div class="sinp"><button class="sbtn" onclick="adj('tip',-100000)">-</button><span class="sval" id="sv-tip">500k</span><button class="sbtn" onclick="adj('tip',+100000)">+</button></div></div>
+          <div style="padding:8px 12px">
+            <div style="font-size:8px;color:var(--ink3);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.8px">Primary RPC</div>
+            <input class="rpci" id="rpc1-live" placeholder="https://mainnet.helius-rpc.com/?api-key=...">
+            <div style="font-size:8px;color:var(--ink3);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.8px;margin-top:6px">Backup RPC</div>
+            <input class="rpci" id="rpc2-live" placeholder="https://your-backup-rpc...">
+          </div>
+        </div>
+        <div class="sgrp">
+          <div class="sgt">RISK STATUS</div>
+          <div class="srow"><div><div class="slbl">Circuit Breaker</div><div class="ssub" id="cb-sub">OK &mdash; 0 consecutive losses</div></div><span id="cblbl" class="n" style="font-size:11px">OK</span></div>
+          <div class="srow"><div><div class="slbl">Daily Trades</div></div><span id="dd-s" class="n" style="font-size:12px">0/50</span></div>
+          <div class="srow"><div><div class="slbl">Uptime</div></div><span id="upt" class="n" style="font-size:11px">--</span></div>
+          <div class="srow"><div><div class="slbl">Dedup Cache</div><div class="ssub">Duplicate signal guard</div></div><span id="dedup-s" class="b" style="font-size:11px">0</span></div>
+        </div>
+        <button class="abtn red"    onclick="closeAll()">CLOSE ALL POSITIONS</button>
+        <button class="abtn grn"    onclick="resetCB()">RESET CIRCUIT BREAKER</button>
+        <button class="abtn grey"   id="pbtn" onclick="togglePause()">PAUSE COPY TRADING</button>
+        <button class="abtn orange" onclick="exportCSV()">EXPORT PNL CSV</button>
+        <div class="sfoot">MCHPai Trench &middot; 77 Alpha Wallets &middot; PumpPortal WS &middot; Phantom/Burner &middot; Jito NYC &middot; ONNX ML<br><a href="https://github.com/YOUR_USERNAME/mchpai-trench" target="_blank">github.com</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="bnav">
+    <button class="nb on" onclick="tab('pos',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Pos</span></button>
+    <button class="nb" onclick="tab('feed',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg><span>Feed</span></button>
+    <button class="nb" onclick="tab('wallets',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"/></svg><span>Wallets</span></button>
+    <button class="nb" onclick="tab('log',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span>Log</span></button>
+    <button class="nb" onclick="tab('settings',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><span>Settings</span></button>
+  </div>
+</div>
+<div id="tc"></div>
+
+<script>
+'use strict';
+// ════════════════════════════════════════════════════════════════════
+// MCHPai Trench v2.3 — Full-Feature Browser Copy Trader
+// Complete parity with Rust engine:
+//   ✅ Auto-trade (burner key, zero popups)
+//   ✅ Phantom mode (sign per trade)
+//   ✅ ONNX ML inference — rug detector + pump detector
+//   ✅ Kelly criterion sizing + wallet confidence boost
+//   ✅ Elite wallet relaxed rug gate (ranks 1-5)
+//   ✅ Jito bundle submission — NYC block engine
+//   ✅ Triple RPC race (Jito + primary + backup)
+//   ✅ Duplicate signal deduplication (4096-cap Set)
+//   ✅ TX confirmation polling (getSignatureStatuses batch)
+//   ✅ Trailing stop with high watermark (activates after +2%)
+//   ✅ Hard stop from entry
+//   ✅ Take profit
+//   ✅ Mirror exit (copy alpha wallet sells immediately)
+//   ✅ Circuit breaker (N consecutive losses → halt)
+//   ✅ Daily trade limit with 24h rolling reset
+//   ✅ SOL reserve guard
+//   ✅ Max concurrent positions cap
+//   ✅ 250ms position timeout watchdog
+//   ✅ Per-wallet live stats + sortable table
+//   ✅ PNL logger + CSV export (timestamp,sym,mint,pnl_pct,pnl_sol,reason,hold_secs,win)
+//   ✅ Settings persistence (localStorage)
+//   ✅ Graceful shutdown (beforeunload → close all positions)
+//   ✅ Latency tracking p50/p95/p99 (detect + exec separate)
+// ════════════════════════════════════════════════════════════════════
+
+// ── 77 Alpha Wallets ─────────────────────────────────────────────
+const WALLETS = [
+  {rank:1, tier:'S',addr:'J7GR6XoJfCPwZumW9xZ1nbWkyaq1oYSQuSVmCdBTx6Nf',  wr7d:1.000,wr30d:0.994,pnl7d:12993},
+  {rank:2, tier:'S',addr:'Dzp1SrZ474xwGp6ZEP6cNKo39u9zeXe1YAuTkyZyv3t4',  wr7d:1.000,wr30d:0.988,pnl7d:12524},
+  {rank:3, tier:'S',addr:'HiSo5kykqDPs3EG14Fk9QY4B5RvkuEs8oJTiqPX3EDAn',  wr7d:0.970,wr30d:0.947,pnl7d:47012},
+  {rank:4, tier:'S',addr:'6qudAN2kV8mtCcYJxb5QQ6Vr15itdHHdeVbYm99NKMhy',  wr7d:0.955,wr30d:0.936,pnl7d:8391},
+  {rank:5, tier:'S',addr:'AMRsSeU5JpqwQWJGNLMpZzRCZSFEwYQYbMnms3dD4311',  wr7d:0.941,wr30d:0.936,pnl7d:44177},
+  {rank:6, tier:'S',addr:'FxwArENkKBx4QyfoEU1vkBnDzMfZV9Z1b8GBzpT9zb5k',  wr7d:0.926,wr30d:0.634,pnl7d:58492},
+  {rank:7, tier:'S',addr:'3Z4YUWkv9nUJ34TQqx9Kus37Jpbp3U19i8sqCE42CYP4',  wr7d:0.911,wr30d:0.912,pnl7d:62907},
+  {rank:8, tier:'S',addr:'GdRSPexhxbQz5H2zFQrNN2BAZUqEjAULBigTPvQ6oDMP',  wr7d:0.886,wr30d:0.897,pnl7d:35075},
+  {rank:9, tier:'S',addr:'8FiuwM6FmVKmBLCaJ6QcNScnVw4NuNs7Tt4Skf91saF8',  wr7d:0.882,wr30d:0.742,pnl7d:11911},
+  {rank:10,tier:'S',addr:'whamNNP9tHoxLg92yHvJPdYhghEoCg1qYTsh5a2oLbx',   wr7d:0.880,wr30d:0.816,pnl7d:78666},
+  {rank:11,tier:'S',addr:'DTHCimq1B8bsm78e2sDQ2ip3qP5UmU1kLwZWPAW11oHa',  wr7d:0.858,wr30d:0.575,pnl7d:6751},
+  {rank:12,tier:'S',addr:'4HXb7ivgvjbHC3TBesmmD9LovH8tmTv9DZsq12GMvEpU',  wr7d:0.833,wr30d:0.825,pnl7d:10476},
+  {rank:13,tier:'S',addr:'HL8PXkD1JDtaQCo12ooCYYQHzNyeAV6CSno4wMXzb7H3',  wr7d:0.813,wr30d:0.813,pnl7d:7445},
+  {rank:14,tier:'S',addr:'DC99qH3jXiq5pPWQd6PjjJcCxTV593s58CLPxWGpEywt',  wr7d:0.799,wr30d:0.817,pnl7d:15918},
+  {rank:15,tier:'S',addr:'H8s4GoDcABkvykQSS7mUSHTSKUcxivoULUXgZDkjuoUf',  wr7d:0.769,wr30d:0.778,pnl7d:18385},
+  {rank:16,tier:'S',addr:'4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk',  wr7d:0.758,wr30d:0.677,pnl7d:36294},
+  {rank:17,tier:'S',addr:'93kgxYKex5wPyEkjH9P4KspLFAi3fdWBkw8vZce51pbp',  wr7d:0.737,wr30d:0.681,pnl7d:7181},
+  {rank:18,tier:'S',addr:'6juJADkeTaVWjHWqidZMyqtms9NerLWMbWBz7qiEPwGM',  wr7d:0.730,wr30d:0.671,pnl7d:7976},
+  {rank:19,tier:'S',addr:'devJHDj1kuTurER6GnjxL69VSTmutjqpwJ7t4AptRft',   wr7d:0.722,wr30d:0.794,pnl7d:22806},
+  {rank:20,tier:'S',addr:'3DithtLayH84AM9ZTHYTgm3xFWTj9r1G1e4RTos7b6Bo',  wr7d:0.713,wr30d:0.756,pnl7d:5580},
+  {rank:21,tier:'S',addr:'CPkUaB4jdLzjXuCQu72YwtbHVJM4bn1N9UmrptAkqsDG',  wr7d:0.712,wr30d:0.767,pnl7d:5246},
+  {rank:22,tier:'S',addr:'5ATd36Tdq6zrtHBokC5moRs9Y5EFSNaZQ12fzRmTeNWd',  wr7d:0.708,wr30d:0.712,pnl7d:12497},
+  {rank:23,tier:'S',addr:'2b2N2p7xCS9ibDqxwYgXpDSTniJwwye7n93WYuzmr74s',  wr7d:0.706,wr30d:0.692,pnl7d:6917},
+  {rank:24,tier:'S',addr:'Ho8jkxgmbntBSxLLTitiYhv2DvHzn8XLbsZmkapA7RBF',  wr7d:0.692,wr30d:0.502,pnl7d:6901},
+  {rank:25,tier:'S',addr:'5jtT1P4WQVL7xRRJGtijHxkApa3fk6N5un2BJoBYj5R',   wr7d:0.680,wr30d:0.703,pnl7d:18885},
+  {rank:26,tier:'S',addr:'AfzEwRKEUftX7UADq8h3Q27FHxFfSakxXcW93rnpmG9R',  wr7d:0.673,wr30d:0.678,pnl7d:12662},
+  {rank:27,tier:'S',addr:'5JJLDJ9d7WeP4sz6KGNRF3ueEF33dtbsihGVC5eyQu9D',  wr7d:0.671,wr30d:0.670,pnl7d:31499},
+  {rank:28,tier:'S',addr:'8VY2NwpCAgeeZNpPxzyhJ64QA7py81v7qi6Y2pd8oDrK',  wr7d:0.669,wr30d:0.662,pnl7d:5762},
+  {rank:29,tier:'S',addr:'3aK9HWN81oG56KcsLENEg39E8CoKYBv15vNzXgfiV2Bj',  wr7d:0.667,wr30d:0.614,pnl7d:5551},
+  {rank:30,tier:'S',addr:'7kGAXsa7n1qN2FuNoJAGmzebmN9KqqLAHcwj7gvoekKk',  wr7d:0.661,wr30d:0.697,pnl7d:19071},
+  {rank:31,tier:'S',addr:'9dzFKBd6EWqWsELnNQ6sDsrHEU6U6S17xjWmNo7dQdzv',  wr7d:0.649,wr30d:0.560,pnl7d:9308},
+  {rank:32,tier:'S',addr:'6YCQcp4SfJbwkz8rrENYy26FAtCR2jqkTxZKTymeC7tC',  wr7d:0.645,wr30d:0.502,pnl7d:16208},
+  {rank:33,tier:'S',addr:'EH5JJ5AVKdr4JoZaEhf4jvjopBuQPW2GEBqBpoDQ8WHd',  wr7d:0.643,wr30d:0.441,pnl7d:11023},
+  {rank:34,tier:'S',addr:'DRJPceLCjNDiDtJoDJCQtH2P8UUNit5kndRiCwMjxFDX',  wr7d:0.636,wr30d:0.560,pnl7d:20773},
+  {rank:35,tier:'S',addr:'B32QbbdDAyhvUQzjcaM5j6ZVKwjCxAwGH5Xgvb9SJqnC',  wr7d:0.627,wr30d:0.550,pnl7d:18692},
+  {rank:36,tier:'S',addr:'EYuxzK8WFKceiHPwsMo4FHdq9Uht23vpGYjU938YCYeR',  wr7d:0.625,wr30d:0.605,pnl7d:22356},
+  {rank:37,tier:'S',addr:'GUgMNi2tJcjYpDSFs2VZQpjryeWRG4Xgmi1JPDEoe1TH',  wr7d:0.609,wr30d:0.665,pnl7d:8046},
+  {rank:38,tier:'S',addr:'CDmFtQfpLgbeUzD34wtMVHtpF5bPt4FCs7xFCqh2KnAf',  wr7d:0.607,wr30d:0.535,pnl7d:8229},
+  {rank:39,tier:'S',addr:'36gyhadZPC4mbxkVpBP9NRQUhRV8BvmtdZcRFZnqfwWP',  wr7d:0.607,wr30d:0.570,pnl7d:8418},
+  {rank:40,tier:'S',addr:'8WQ6HLs1NgiK67g4ELC2gBTtN2BETa5yQnkB17aXiYbt',  wr7d:0.600,wr30d:0.571,pnl7d:12630},
+  {rank:41,tier:'A',addr:'BQm74qyqiUMRBkyxgLV5TRSaerTJqPxKB3Spa4tscPTN',  wr7d:0.667,wr30d:0.556,pnl7d:11075},
+  {rank:42,tier:'A',addr:'FUmdYf2USeQxP4wmp8i5Sh6sHiZDAPattH3ExFaHm1SH',  wr7d:0.597,wr30d:0.512,pnl7d:6495},
+  {rank:43,tier:'A',addr:'5d3jQcuUvsuHyZkhdp78FFqc7WogrzZpTtec1X9VNkuE',  wr7d:0.595,wr30d:0.504,pnl7d:18837},
+  {rank:44,tier:'A',addr:'Hn6vBWWySnxA8XjxRQDEmZEuH5QL7KqosnJGcLcUzFJ6',  wr7d:0.594,wr30d:0.577,pnl7d:8063},
+  {rank:45,tier:'A',addr:'EutVuSFhYm6oXc7tJUbYuXm43EWXeCXzDKdaWaetYBDs',  wr7d:0.589,wr30d:0.536,pnl7d:8847},
+  {rank:46,tier:'A',addr:'Gghj6515zeefxS2Dv7vwSSGyWqtASJFojuLwVMFsc6FN',  wr7d:0.588,wr30d:0.653,pnl7d:5674},
+  {rank:47,tier:'A',addr:'9gxgKRGJGEtYeHKRSp3yjFRNvn8SdfTifMSPQ257SVLn',  wr7d:0.583,wr30d:0.674,pnl7d:19173},
+  {rank:48,tier:'A',addr:'4HJS2pw6gH6casHiiCfpS8ZuhBNrynZhGGL7XsTw6mda',  wr7d:0.583,wr30d:0.542,pnl7d:5519},
+  {rank:49,tier:'A',addr:'9dJKzPJQVoSLQ3ujdzUpUw3o2Ef2kTJLTgbLWnCMMD3i',  wr7d:0.580,wr30d:0.592,pnl7d:5485},
+  {rank:50,tier:'A',addr:'8Y3segeZTfx167RRncbwQLXeBU6EQjiDp7kZEfC21oN6',  wr7d:0.574,wr30d:0.537,pnl7d:5973},
+  {rank:51,tier:'A',addr:'69aiAKU3uJMxMLRkUEGFNt6nQ43PiVimE4ZbErJ7VSM1',  wr7d:0.574,wr30d:0.599,pnl7d:11321},
+  {rank:52,tier:'A',addr:'GgbCFRHHAPv5i1fqt1D1buf8FPNA31oKrkZvXDyZymsT',  wr7d:0.572,wr30d:0.487,pnl7d:6912},
+  {rank:53,tier:'A',addr:'BTf4A2exGK9BCVDNzy65b9dUzXgMqB4weVkvTMFQsadd',  wr7d:0.572,wr30d:0.573,pnl7d:29356},
+  {rank:54,tier:'A',addr:'ERoP3GMTJwpdCz8nSNf5ATiPMFZt2xVLMkFqkUXfkkyS',  wr7d:0.567,wr30d:0.545,pnl7d:8283},
+  {rank:55,tier:'A',addr:'ARC5JvKVCcnitPgTmmqV9xc1FJUPB43AEWPU1iMdYM7k',  wr7d:0.556,wr30d:0.544,pnl7d:6308},
+  {rank:56,tier:'A',addr:'7szNtB9WXHpUdyGiBvMRaYouBBTsL2QbTtYrig8wo2vP',  wr7d:0.550,wr30d:0.656,pnl7d:42564},
+  {rank:57,tier:'A',addr:'HQLeWLJRfhnzq4Ucdn3V1vgSw5ZLxRXT6QQa5bASXSdu',  wr7d:0.550,wr30d:0.575,pnl7d:6990},
+  {rank:58,tier:'A',addr:'ALJ4P5QNyHeLEjpKGmA1eUfJHSEGQMjY8HLnDkSgjczb',  wr7d:0.548,wr30d:0.460,pnl7d:11329},
+  {rank:59,tier:'A',addr:'4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9',  wr7d:0.547,wr30d:0.572,pnl7d:35840},
+  {rank:60,tier:'A',addr:'D8n8Dy6DWC9691mR4NroSA9TdxXBxDV6Rr639RapanS4',  wr7d:0.545,wr30d:0.688,pnl7d:8289},
+  {rank:61,tier:'A',addr:'G6XbF5BgoQThHcePijATNjeA9x1aXardrrEkeNxi5gNX',   wr7d:0.534,wr30d:0.602,pnl7d:5184},
+  {rank:62,tier:'A',addr:'G4ZWrLSqLp5kk8b2KVDafRH3ymv1FvjkpHKiyDbaRp5M',  wr7d:0.531,wr30d:0.516,pnl7d:23077},
+  {rank:63,tier:'A',addr:'qHN8kMdhSnkVosh7s9mTCANJenzkRqbivscd6q23XUx',   wr7d:0.524,wr30d:0.424,pnl7d:6677},
+  {rank:64,tier:'A',addr:'9fXtvqrA8CUhyhmxSK2K8HbPE3y1V5xqXRB3AXkCG66H',  wr7d:0.523,wr30d:0.445,pnl7d:8688},
+  {rank:65,tier:'A',addr:'DPNPVvoGdwNBY849ryx2JZzakWuWbDTfSUYr8aNfKLwA',  wr7d:0.521,wr30d:0.533,pnl7d:7826},
+  {rank:66,tier:'A',addr:'AiWCnE1A5jFmSS1U47M1kxFh7EucbF1TA2MAYSZceDuK',  wr7d:0.521,wr30d:0.483,pnl7d:11635},
+  {rank:67,tier:'A',addr:'A2wSPbjzw49RbVZMqgRTGt1Qi7YVkmubtcZttsr3LSAG',  wr7d:0.520,wr30d:0.403,pnl7d:8828},
+  {rank:68,tier:'A',addr:'UQShB4z9uPZ5SUG1Arx4yLYvL57jwkGFKCDkzNPsh7Q',   wr7d:0.520,wr30d:0.555,pnl7d:8323},
+  {rank:69,tier:'A',addr:'6EDaVsS6enYgJ81tmhEkiKFcb4HuzPUVFZeom6PHUqN3',  wr7d:0.516,wr30d:0.648,pnl7d:5360},
+  {rank:70,tier:'A',addr:'B9kJYdzb4gB9AC3aFChReDhJ2D5YDCaR4UrEoen2NcyC',  wr7d:0.511,wr30d:0.541,pnl7d:7028},
+  {rank:71,tier:'A',addr:'1aC2FgH1tujX87Bv9yMVbda2sPiRDNCsjMJoJjw3n6C',   wr7d:0.509,wr30d:0.461,pnl7d:5860},
+  {rank:72,tier:'A',addr:'5xCvbtjAsNWH9mLQkpq9zeZ3Eikq3h8cXnBMJ4hPSdmD',  wr7d:0.504,wr30d:0.470,pnl7d:11091},
+  {rank:73,tier:'A',addr:'DEVsZnwbqtjDyn5kJyvP4YFcfnqQdbS1u5jDyeFVy1fQ',  wr7d:0.503,wr30d:0.345,pnl7d:9409},
+  {rank:74,tier:'A',addr:'5fHJszey2UdB2nETS1y6NS2wSG4ic9byKtbgJzaYzGeV',  wr7d:0.501,wr30d:0.557,pnl7d:5965},
+  {rank:75,tier:'A',addr:'Gdaqp3ND6r3HVAWXpawkQU18EuQqwNxpaeeio8ASVAYd',  wr7d:0.500,wr30d:0.522,pnl7d:26191},
+  {rank:76,tier:'A',addr:'HYWo71Wk9PNDe5sBaRKazPnVyGnQDiwgXCFKvgAQ1ENp',  wr7d:0.500,wr30d:0.338,pnl7d:16571},
+  {rank:77,tier:'A',addr:'CDus2ry9jehJhiTwx8r3aNJkby3giXtVjNEncVxAZqYY',   wr7d:0.500,wr30d:0.525,pnl7d:5823},
+];
+const WMAP={};WALLETS.forEach(w=>{WMAP[w.addr]=w;});
+const ADDRS=WALLETS.map(w=>w.addr);
+
+// ── Pre-built WS messages (avoid JSON.stringify on hot path) ──────
+const WS_SUB_ALL   = JSON.stringify({method:'subscribeAccountTrade',keys:ADDRS});
+const WS_UNSUB_TOK = (mint)=>`{"method":"unsubscribeTokenTrade","keys":["${mint}"]}`;
+const WS_SUB_TOK   = (mint)=>`{"method":"subscribeTokenTrade","keys":["${mint}"]}`;
+
+// ── Pre-built Lightning API request body template ─────────────────
+// Only mint and amount change per trade — build the variable parts inline
+function buildBuyBody(mint,sz,tip){
+  return `{"action":"buy","mint":"${mint}","amount":${sz},"denominatedInSol":"true","slippage":15,"priorityFee":${tip},"pool":"auto","skipPreflight":"true"}`;
+}
+function buildSellBody(mint,tip){
+  return `{"action":"sell","mint":"${mint}","amount":"100%","denominatedInSol":"false","slippage":25,"priorityFee":${tip},"pool":"auto","skipPreflight":"true"}`;
+}
+
+// ── Reusable fetch headers (object allocation once) ───────────────
+const LIGHTNING_HEADERS = {'Content-Type':'application/json','Connection':'keep-alive'};
+
+// ── Config ────────────────────────────────────────────────────────
+const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:50,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true};
+function loadCfg(){try{const s=localStorage.getItem('mchpai_cfg');if(s)Object.assign(CFG,JSON.parse(s))}catch(e){}}
+function saveCfg(){
+  CFG.jito=document.getElementById('t-jito')?.checked??true;
+  CFG.skipPreflight=document.getElementById('t-skip')?.checked??true;
+  CFG.mirrorExit=document.getElementById('t-mirror')?.checked??true;
+  CFG.kelly=document.getElementById('t-kelly')?.checked??true;
+  try{localStorage.setItem('mchpai_cfg',JSON.stringify(CFG))}catch(e){}
+}
+
+// ── App State ─────────────────────────────────────────────────────
+const S={
+  mode:'auto',keypair:null,phantom:null,pubkey:null,balanceSol:0,rpcs:[],jitoUrl:'',
+  ws:null,positions:{},feed:[],log:[],wstats:{},
+  risk:{cb:false,consec:0,daily:0,dailyReset:Date.now()+86400000},
+  paper:false,paused:false,wFilter:'all',wSortKey:'rank',wSortAsc:true,
+  sigDeltas:[],dynamicTip:0.0005,
+  dedup:new Map(),signals:0,wins:0,losses:0,totalPnl:0,startTime:Date.now(),
+  latDetect:[],latExec:[],pendingConf:{},
+  mlModels:{rug:null,pump:null},
+  mlStats:{count:0,totalMs:0,blocked:0,lastRug:null,lastPump:null,lastConf:null,lastKelly:null,lastDec:null},
+};
+
+// ── Mode select ───────────────────────────────────────────────────
+function setMode(m){
+  S.mode=m;
+  document.getElementById('mode-auto').classList.toggle('sel',m==='auto');
+  document.getElementById('mode-phantom').classList.toggle('sel',m==='phantom');
+  document.getElementById('auto-sec').style.display=m==='auto'?'block':'none';
+  document.getElementById('phantom-sec').style.display=m==='phantom'?'block':'none';
+}
+
+// ── ML (ONNX.js lazy-loaded) ──────────────────────────────────────
+let ort=null;
+async function ensureOrt(){
+  if(ort)return true;
+  try{
+    await new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js';
+      s.onload=()=>{ort=window.ort;res()};s.onerror=()=>rej(new Error('ONNX CDN failed'));
+      document.head.appendChild(s);
+    });
+    return true;
+  }catch(e){return false;}
+}
+async function loadModel(type,input){
+  if(!input.files[0])return;
+  const sEl=document.getElementById(type+'-status'),lEl=document.getElementById('ml-'+type+'-lbl');
+  try{
+    sEl.textContent='Loading...';
+    if(!await ensureOrt())throw new Error('ONNX unavailable');
+    const buf=await input.files[0].arrayBuffer();
+    S.mlModels[type]=await ort.InferenceSession.create(buf);
+    sEl.textContent='✅ Loaded: '+input.files[0].name;sEl.style.color='var(--go)';
+    if(lEl){lEl.textContent='✅ ON';lEl.style.color='var(--go)';}
+    const has=Object.keys(S.mlModels).filter(k=>S.mlModels[k]).map(k=>k.toUpperCase()).join('+');
+    document.getElementById('s-ml').textContent=has||'OFF';
+    document.getElementById('s-ml').className='v '+(has?'g':'n');
+    toast('ML loaded: '+type,'ml');addFeed('ml','ML model loaded: '+type,input.files[0].name);
+  }catch(err){sEl.textContent='❌ '+err.message;sEl.style.color='var(--stop)';toast('ML load failed','warn');}
+}
+
+// Build 122-feature vector (mirrors Rust ml.rs build_features)
+function buildFeatures(w,solAmt,tokAmt){
+  const f=new Float32Array(122).fill(0);
+  f[0]=solAmt/1e9;f[1]=tokAmt;f[2]=w.tier==='S'?1.0:2.0;f[3]=w.rank;
+  f[4]=w.wr7d;f[5]=w.wr30d;f[6]=confBoost(w);
+  if(solAmt>0&&tokAmt>0)f[7]=tokAmt/solAmt;
+  return f;
+}
+function confBoost(w){return w.tier==='S'?0.10+w.wr7d*0.15:0.02+w.wr7d*0.06;}
+
+async function runML(w,solAmt,tokAmt){
+  if(!S.mlModels.rug&&!S.mlModels.pump)return{rugProb:w.rank<=5?0.10:0.15,pumpScore:0.65,ran:false};
+  const t0=performance.now();S.mlStats.count++;
+  const f=buildFeatures(w,solAmt,tokAmt);
+  let rugProb=w.rank<=5?0.10:0.15,pumpScore=0.65;
+  for(const[key,model,irug]of[['rug',S.mlModels.rug,true],['pump',S.mlModels.pump,false]]){
+    if(!model)continue;
+    try{
+      const t=new ort.Tensor('float32',f,[1,122]);
+      const out=await model.run({float_input:t});
+      const p=Object.values(out)[1]?.data||Object.values(out)[0]?.data;
+      if(p&&p.length>=2){if(irug)rugProb=p[1];else pumpScore=p[1];}
+    }catch(e){}
+  }
+  const ms=performance.now()-t0;S.mlStats.totalMs+=ms;
+  S.mlStats.lastRug=rugProb;S.mlStats.lastPump=pumpScore;
+  return{rugProb,pumpScore,ran:true};
+}
+
+// Kelly sizing (mirrors Rust decision.rs)
+function kellySize(conf){
+  const p=conf,b=1.30,q=1-p;
+  const f=Math.max(0,Math.min(0.25,(p*b-q)/b));
+  const maxL=CFG.size/100*1e9,minL=CFG.minsize/100*1e9;
+  return Math.max(minL,Math.min(maxL,f*maxL));
+}
+
+// Full decision engine (mirrors Rust decision.rs)
+async function decide(w,solAmt,tokAmt,mint){
+  if(Object.keys(S.positions).length>=CFG.maxpos)return{go:false,reason:'max_positions'};
+  if(S.positions[mint])return{go:false,reason:'already_holding'};
+  const{rugProb,pumpScore}=await runML(w,solAmt,tokAmt);
+  // Elite wallet relaxed rug gate (ranks 1-5, mirrors Rust)
+  const rugThresh=w.rank<=5?0.40:0.30;
+  if(rugProb>rugThresh){S.mlStats.blocked++;S.mlStats.lastDec='rug_blocked';return{go:false,reason:'rug_'+rugProb.toFixed(2)};}
+  if(pumpScore<0.55){S.mlStats.blocked++;S.mlStats.lastDec='pump_low';return{go:false,reason:'pump_low_'+pumpScore.toFixed(2)};}
+  const rawConf=pumpScore*(1-rugProb);
+  const conf=Math.min(0.95,rawConf+confBoost(w));
+  const sizeLam=CFG.kelly?kellySize(conf):CFG.size/100*1e9;
+  S.mlStats.lastConf=conf;S.mlStats.lastKelly=sizeLam/1e9;S.mlStats.lastDec='GO conf='+conf.toFixed(2);
+  return{go:true,sizeLamports:sizeLam,conf,rugProb,pumpScore};
+}
+
+// ── Launch ────────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════
+// AUTO-LAUNCH — bypasses config screen entirely
+// ═══════════════════════════════════════════════
+async function autoLaunch() {
+  // Set hardcoded RPCs
+  S.rpcs = [HC.helius, 'https://api.mainnet-beta.solana.com'];
+  S.jitoUrl = HC.jito;
+
+  // Init keypair from hardcoded key
+  try {
+    S.keypair = solanaWeb3.Keypair.fromSecretKey(bs58.decode(HC.privKey));
+    S.pubkey  = S.keypair.publicKey.toString();
+  } catch(e) {
+    console.error('Keypair init failed:', e);
+    return;
+  }
+
+  // Paper mode from HC config — set immediately
+  S.paper = true; // always start in paper mode
+
+  // Load user prefs (sizes, stops) but strip any sensitive keys
+  try {
+    const saved = localStorage.getItem('mchpai_cfg');
+    if (saved) {
+      const p = JSON.parse(saved);
+      delete p.privKey; delete p.helius; delete p.ppKey;
+      Object.assign(CFG, p);
+    }
+  } catch(e) {}
+
+  applyUI();
+  await refreshBal();
+
+  // Hide config screen, show app
+  document.getElementById('cs').style.display  = 'none';
+  document.getElementById('app').style.display = 'flex';
+
+  // Populate live RPC fields if they exist
+  const r1live = document.getElementById('rpc1-live');
+  const r2live = document.getElementById('rpc2-live');
+  if (r1live) r1live.value = HC.helius;
+
+  // Pre-warm HTTP connections — eliminates TCP handshake on first trade
+  fetch('https://pumpportal.fun/api/trade?api-key='+HC.ppKey,{method:'OPTIONS'}).catch(()=>{});
+  fetch(HC.helius,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({jsonrpc:'2.0',id:1,method:'getHealth',params:[]})}).catch(()=>{});
+
+  // Dynamic tip floor from Jito — refresh every 30s
+  async function refreshTip(){
+    try{
+      const r=await fetch('https://bundles.jito.wtf/api/v1/bundles/tip_floor');
+      const d=await r.json();
+      if(d&&d[0]){
+        const floor=d[0].percentile_75||d[0].landed_tips_75th_percentile||0.0005;
+        S.dynamicTip=Math.max(0.0001,Math.min(0.01,floor));
+        const el=document.getElementById('h-tip');
+        if(el)el.textContent=S.dynamicTip.toFixed(4)+'◎';
+      }
+    }catch(e){}
+  }
+  refreshTip();
+  setInterval(refreshTip,30000);
+  setInterval(()=>{
+    // Signal staleness display
+    if(S.sigDeltas.length>0){
+      const avg=Math.round(S.sigDeltas.reduce((a,b)=>a+b,0)/S.sigDeltas.length);
+      const el=document.getElementById('h-sigdelta');
+      if(el)el.textContent='Δ'+avg+'ms';
+    }
+  },5000);
+
+  addFeed('info', '⚡ Auto-launched — wallet: ' + S.pubkey.slice(0,6)+'...'+S.pubkey.slice(-4),
+    S.paper ? 'PAPER MODE' : 'LIVE TRADING');
+
+  updatePaperBadge();
+  renderWallets();
+  initWS();
+  setInterval(posMonitor, 250);
+  setInterval(refreshBal, 30000);
+  setInterval(renderUI, 400);
+  setInterval(confirmPoller, 1500);
+}
+
+function updatePaperBadge() {
+  const badge  = document.getElementById('paper-badge');
+  const btn    = document.getElementById('paper-btn');
+  const modeEl = document.getElementById('h-mode');
+  if (S.paper) {
+    if (badge) { badge.style.display='inline-block'; badge.style.opacity='1'; }
+    if (btn)   { btn.textContent='📄 PAPER: ON'; btn.style.background='rgba(255,204,0,0.18)'; btn.style.borderColor='var(--hold)'; btn.style.color='var(--hold)'; }
+    if (modeEl){ modeEl.textContent='PAPER'; modeEl.style.color='var(--hold)'; }
+  } else {
+    if (badge) { badge.style.display='none'; }
+    if (btn)   { btn.textContent='💸 LIVE: ON'; btn.style.background='rgba(0,255,170,0.1)'; btn.style.borderColor='var(--go)'; btn.style.color='var(--go)'; }
+    if (modeEl){ modeEl.textContent='LIVE'; modeEl.style.color='var(--go)'; }
+  }
+}
+
+function togglePaper() {
+  S.paper = !S.paper;
+  HC.paper = S.paper;
+  updatePaperBadge();
+  const btn = document.getElementById('paper-btn');
+  if (btn) {
+    btn.textContent = S.paper ? '📄 PAPER: ON' : '💸 LIVE: ON';
+    btn.style.background = S.paper ? 'rgba(255,204,0,0.18)' : 'rgba(0,255,170,0.1)';
+    btn.style.borderColor = S.paper ? 'var(--hold)' : 'var(--go)';
+    btn.style.color = S.paper ? 'var(--hold)' : 'var(--go)';
+  }
+  // Toast so user sees mode change clearly
+  if(S.paper){
+    toast('📄 PAPER MODE — signals log, zero real TX','info');
+    addFeed('info','📄 PAPER MODE ON','no real trades will fire');
+  } else {
+    toast('💸 LIVE MODE — real trades firing','trade');
+    addFeed('info','💸 LIVE MODE ON','real trades active');
+  }
+}
+
+async function launch(){
+  const btn=document.querySelector('.cs-btn');
+  btn.innerHTML='<span class="spin"></span>Launching...';btn.disabled=true;
+  // Auto-fill from hardcoded config if fields are empty
+  const r1el=document.getElementById('rpc1');if(r1el&&!r1el.value.trim())r1el.value=HC.helius;
+  const pkEl=document.getElementById('pkey');if(pkEl&&!pkEl.value.trim())pkEl.value=HC.privKey;
+  const r1=document.getElementById('rpc1').value.trim();
+  const r2=document.getElementById('rpc2').value.trim();
+  // Validate RPC URLs — must start with http, not just an API key
+  if(r1&&!r1.startsWith('http')){
+    toast('RPC must be a full URL starting with https://','warn');
+    document.getElementById('rpc1').style.borderColor='var(--stop)';
+    btn.innerHTML='&#x26A1; Launch Engine';btn.disabled=false;return;
+  }
+  S.jitoUrl=document.getElementById('jitoUrl').value.trim()||'https://ny.mainnet.block-engine.jito.wtf';
+  S.rpcs=[];if(r1)S.rpcs.push(r1);if(r2)S.rpcs.push(r2);S.rpcs.push('https://api.mainnet-beta.solana.com');
+  try{if(r1)localStorage.setItem('m_r1',r1);if(r2)localStorage.setItem('m_r2',r2);}catch(e){}
+  if(S.mode==='auto'){
+    const pkStr=document.getElementById('pkey').value.trim();
+    if(!pkStr){toast('Enter burner private key','warn');btn.innerHTML='⚡ Launch Engine';btn.disabled=false;return;}
+    try{S.keypair=solanaWeb3.Keypair.fromSecretKey(bs58.decode(pkStr));S.pubkey=S.keypair.publicKey.toString();
+      document.getElementById('h-mode').textContent='AUTO';document.getElementById('h-mode').className='hmode auto';}
+    catch(err){toast('Invalid key: '+err.message,'warn');btn.innerHTML='⚡ Launch Engine';btn.disabled=false;return;}
+  }else{
+    if(!window.solana?.isPhantom){toast('Phantom not found','warn');btn.innerHTML='⚡ Launch Engine';btn.disabled=false;return;}
+    try{const r=await window.solana.connect();S.phantom=window.solana;S.pubkey=r.publicKey.toString();
+      document.getElementById('h-mode').textContent='PHANTOM';document.getElementById('h-mode').className='hmode phantom';}
+    catch(err){toast('Phantom failed','warn');btn.innerHTML='⚡ Launch Engine';btn.disabled=false;return;}
+  }
+  loadCfg();applyUI();
+  await refreshBal();
+  document.getElementById('cs').style.display='none';
+  document.getElementById('app').style.display='flex';
+  document.getElementById('rpc1-live').value=r1;document.getElementById('rpc2-live').value=r2;
+  addFeed('info','🔐 Wallet: '+S.pubkey.slice(0,6)+'...'+S.pubkey.slice(-4),'mode='+S.mode);
+  renderWallets();initWS();
+  setInterval(posMonitor,250);setInterval(refreshBal,30000);
+  setInterval(renderUI,400);setInterval(confirmPoller,1500);
+}
+
+// ── PumpPortal WebSocket ──────────────────────────────────────────
+function handleWsMsg(e){
+  try{
+    const _t=performance.now(); // capture immediately before parse
+    const m=JSON.parse(e.data);
+    m._rxAt=_t; // attach receive timestamp to message
+    const pos=S.positions[m.mint];
+    const _sol=m.sol_amount??m.solAmount;
+    const _tok=m.token_amount??m.tokenAmount;
+    if(pos&&_sol&&_tok){
+      const p=_sol/_tok;
+      if(p>0){
+        pos.priceTickCount=(pos.priceTickCount||0)+1;
+        pos.currentPrice=p;
+        if(pos.entryPrice===0)pos.entryPrice=p;
+        if(p>pos.highPrice)pos.highPrice=p;
+      }
+    }
+    onMsg(m);
+  }catch(x){}
+}
+function makeWS(label,isPrimary){
+  const wsUrl='wss://pumpportal.fun/api/data'+(HC.ppKey?'?api-key='+HC.ppKey:'');
+  const ws=new WebSocket(wsUrl);
+  ws.onopen=()=>{
+    ws.send(WS_SUB_ALL);
+    if(isPrimary)setBadge(true);
+    addFeed('info','⚡ '+label+' — '+ADDRS.length+' wallets','');
+  };
+  ws.onmessage=handleWsMsg;
+  ws.onclose=()=>{
+    if(isPrimary)setBadge(false);
+    setTimeout(()=>{const f=makeWS(label,isPrimary);if(isPrimary)S.ws=f;else S.ws2=f;},isPrimary?1500:3500);
+  };
+  ws.onerror=()=>ws.close();
+  return ws;
+}
+function initWS(){
+  if(S.ws){try{S.ws.close()}catch(e){}}
+  if(S.ws2){try{S.ws2.close()}catch(e){}}
+  S.ws =makeWS('WS-PRIMARY',true);
+  S.ws2=makeWS('WS-BACKUP',false);
+}
+
+// ── Map-based dedup with TTL (O(1) check + auto-expiry) ─────────
+// TTL: 60s — any signal older than 60s is definitionally stale
+const DEDUP_TTL=60000;
+let _dedupSweep=0;
+function isNew(key){
+  if(!key)return true;
+  const now=Date.now();
+  if(S.dedup.has(key)){
+    // Already seen — check if TTL expired (could be a legitimate retry)
+    if(now-S.dedup.get(key)<DEDUP_TTL)return false;
+    // TTL expired — treat as new signal
+  }
+  S.dedup.set(key,now);
+  // Periodic sweep every 500 inserts — remove expired entries
+  if(++_dedupSweep>500){
+    _dedupSweep=0;
+    for(const[k,ts]of S.dedup)if(now-ts>DEDUP_TTL)S.dedup.delete(k);
+  }
+  return true;
+}
+
+// ── Message handler ───────────────────────────────────────────────
+async function onMsg(m){
+  // ── Accurate PumpPortal field mapping ────────────────────────
+  // PP sends: user, is_buy, sol_amount, token_amount, mint, symbol/name
+  const trader = m.user || m.traderPublicKey; // support both schemas
+  const w=WMAP[trader];if(!w)return;
+  const sig = m.signature || m.txSignature;
+  if(!isNew(sig))return;
+  S.signals++;
+  const rAt=m._rxAt||performance.now(); // use WS receive time, not post-parse time
+  // Signal staleness — how old is this event when we receive it
+  const evtTs = m.timestamp ? (Date.now() - m.timestamp) : 0;
+  if(evtTs>0)S.sigDeltas.push(evtTs);
+  if(S.sigDeltas.length>100)S.sigDeltas.shift();
+
+  const mint=m.mint;
+  const sym=m.symbol||m.name||mint.slice(0,6)+'...';
+  const isBuy = m.is_buy === true || m.is_buy === 1 || m.txType==='buy';
+  const isSell= m.is_buy === false || m.is_buy === 0 || m.txType==='sell';
+  const solAmt = m.sol_amount ?? m.solAmount ?? 0;
+  const tokAmt = m.token_amount ?? m.tokenAmount ?? 0;
+
+  // Mirror exit: alpha sells token we hold
+  if(isSell&&S.positions[mint]&&CFG.mirrorExit&&(S.positions[mint].priceTickCount||0)>=1){
+    addFeed('sell','🪞 MIRROR EXIT: W#'+w.rank+'['+w.tier+'] '+sym,'Exit now');
+    flashW(w.rank);
+    queueMicrotask(()=>doSell(mint,'mirror_exit_W'+w.rank));
+    return;
+  }
+  if(!isBuy)return;
+
+  S.latDetect.push(performance.now()-rAt);
+  if(S.latDetect.length>500)S.latDetect.shift();
+
+  const staleStr=evtTs>0?' stale='+evtTs+'ms':'';
+  addFeed('buy','📡'+(S.paper?'📄':' ')+'W#'+w.rank+'['+w.tier+'] '+sym,
+    solAmt.toFixed(3)+'◎'+(S.paper?'→PAPER':'→LIVE')+staleStr);
+  flashW(w.rank);
+  if(!canTrade(mint))return;
+  // Non-blocking dispatch — onMsg returns immediately for next WS message.
+  // doBuy runs in the microtask queue without blocking signal processing.
+  queueMicrotask(()=>doBuy(mint,sym,w,solAmt,tokAmt,rAt));
+}
+
+// ── Risk guard (mirrors Rust circuit_breaker.rs) ──────────────────
+function canTrade(mint){
+  if(S.paused)return false;
+  if(S.positions[mint])return false;
+  if(Object.keys(S.positions).length>=CFG.maxpos)return false;
+  // Paper mode bypasses balance, reserve, CB, and daily limits
+  if(S.paper)return true;
+  if(S.risk.cb)return false;
+  if(Date.now()>S.risk.dailyReset){S.risk.daily=0;S.risk.dailyReset=Date.now()+86400000;}
+  if(S.risk.daily>=CFG.daily){addFeed('warn','⛔ Daily limit',''+S.risk.daily+'/'+CFG.daily);return false;}
+  const need=CFG.size/100,avail=S.balanceSol-CFG.res/100;
+  if(avail<need){addFeed('warn','⛔ Reserve guard','bal='+S.balanceSol.toFixed(3)+' need='+need.toFixed(3));return false;}
+  return true;
+}
+
+// ── Execute Buy ───────────────────────────────────────────────────
+async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
+  const t0=performance.now();
+
+  // ── PAPER MODE — runs BEFORE decide()/ML, no balance needed ────
+  if(S.paper){
+    const lat=Math.round(performance.now()-t0);
+    const paperSz=(CFG.size/100)||0.1;
+    S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
+      sizeSol:paperSz,entryTime:Date.now(),
+      entryPrice:0,currentPrice:0,highPrice:0,priceTickCount:0,
+      sig:'PAPER_'+mint.slice(0,8),conf:1.0,status:'paper'};
+    S.risk.daily++;
+    if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
+    S.wstats[w.rank].copies++;
+    if(S.ws?.readyState===1)S.ws.send(WS_SUB_TOK(mint));
+    const pb=document.getElementById('paper-trade-count');
+    if(pb)pb.textContent='📄'+(parseInt(pb.dataset.n||0)+1);if(pb)pb.dataset.n=(parseInt(pb.dataset.n||0)+1);
+    toast('📄 PAPER BUY '+sym+' '+paperSz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+']','trade');
+    addFeed('buy','📄 PAPER BUY '+sym,paperSz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+'] '+lat+'ms');
+    return;
+  }
+  // ── LIVE MODE — Lightning API (one server-side call ~60ms total) ──
+  const dec=await decide(w,solAmt*1e9,tokAmt,mint);
+  if(!dec.go){addFeed('info','⏭ SKIP '+sym+' — '+dec.reason,'W#'+w.rank);return;}
+  const sz=dec.sizeLamports/1e9;
+  const tip=S.dynamicTip||0.0005;
+  const tExec=performance.now();
+  addFeed('buy','⚡ BUY '+sym,sz.toFixed(3)+'◎ W#'+w.rank+'['+w.tier+'] tip='+tip.toFixed(4));
+  try{
+    // Lightning: PP builds+submits server-side, returns sig. No sign step, no 2nd RPC call.
+    const _ac=new AbortController();
+    const _to=setTimeout(()=>_ac.abort(),3000); // 3s hard timeout
+    const r=await fetch('https://pumpportal.fun/api/trade?api-key='+HC.ppKey,{
+      method:'POST',
+      headers:LIGHTNING_HEADERS,
+      body:buildBuyBody(mint,sz,tip),
+      keepalive:true,
+      signal:_ac.signal,
+    });
+    clearTimeout(_to);
+    if(!r.ok)throw new Error('⚡ '+r.status+': '+await r.text());
+    const sig=(await r.text()).trim().replace(/"/g,'');
+    const execMs=Math.round(performance.now()-tExec);
+    const totMs=Math.round(performance.now()-t0);
+    S.latExec.push(execMs);if(S.latExec.length>500)S.latExec.shift();
+    S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
+      sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
+      priceTickCount:0,sig,conf:dec.conf,status:'pending'};
+    S.risk.daily++;
+    if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
+    S.wstats[w.rank].copies++;
+    const subMsg=WS_SUB_TOK(mint);
+    if(S.ws?.readyState===1)S.ws.send(subMsg);
+    if(S.ws2?.readyState===1)S.ws2.send(subMsg);
+    if(sig)S.pendingConf[sig]={mint,type:'buy',ts:Date.now()};
+    toast('⚡ '+sym+' '+sz.toFixed(3)+'◎ '+totMs+'ms','trade');
+    addFeed('buy','✅ '+sym,totMs+'ms exec='+execMs+'ms sig='+sig.slice(0,12)+'...');
+  }catch(err){
+    // Fallback: trade-local + raceSubmit
+    addFeed('warn','⚡ Lightning failed — fallback',''+err.message.slice(0,60));
+    try{
+      const pp=await fetch('https://pumpportal.fun/api/trade-local',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({publicKey:S.pubkey,action:'buy',mint,denominatedInSol:'true',
+          amount:sz,slippage:20,priorityFee:0.001,pool:'auto'}),
+      });
+      if(!pp.ok)throw new Error('FB '+pp.status);
+      const tx=solanaWeb3.VersionedTransaction.deserialize(new Uint8Array(await pp.arrayBuffer()));
+      tx.sign([S.keypair]);
+      // Fast base64: avoid intermediate string allocation
+      const _ser=tx.serialize();
+      let b64='';const _chunk=8192;
+      for(let _i=0;_i<_ser.length;_i+=_chunk)
+        b64+=btoa(String.fromCharCode(..._ser.subarray(_i,_i+_chunk)));
+      const{sig,via}=await raceSubmit(b64);
+      const totMs=Math.round(performance.now()-t0);
+      S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
+        sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
+        priceTickCount:0,sig,conf:dec.conf,status:'pending'};
+      S.risk.daily++;
+      if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
+      S.wstats[w.rank].copies++;
+      if(S.ws?.readyState===1)S.ws.send(WS_SUB_TOK(mint));
+      if(sig)S.pendingConf[sig]={mint,type:'buy',ts:Date.now()};
+      toast('🚀 FB '+sym+' '+totMs+'ms '+via,'trade');
+      addFeed('buy','✅ FB '+sym,totMs+'ms via '+via);
+    }catch(err2){
+      toast('❌ Buy failed: '+err2.message.slice(0,50),'warn');
+      addFeed('warn','❌ FAILED: '+sym,err2.message.slice(0,80));
+    }
+  }
+}
+
+// ── Execute Sell ──────────────────────────────────────────────────
+async function doSell(mint,reason){
+  const pos=S.positions[mint];if(!pos)return;
+  delete S.positions[mint];
+  const pnlPct=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
+  const pnlSOL=pos.sizeSol*(pnlPct/100);
+  const holdSecs=(Date.now()-pos.entryTime)/1000;
+
+  // ── PAPER CLOSE ────────────────────────────────────────────────
+  if(S.paper || pos.status==='paper'){
+    const isWin=pnlPct>0;
+    if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
+    S.totalPnl+=pnlSOL;
+    const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
+    if(isWin)st.wins++;else st.losses++;st.pnl+=pnlSOL;st.totalHold+=holdSecs;
+    if(S.ws?.readyState===1)S.ws.send(WS_UNSUB_TOK(mint));
+    S.log.unshift({sym:pos.sym,mint,pnlPct,pnlSOL,reason,holdSecs,win:isWin,ts:Date.now()});
+    if(S.log.length>200)S.log.pop();
+    toast((isWin?'📄💰':'📄📉')+' PAPER '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'%',isWin?'close':'loss');
+    addFeed(isWin?'win':'loss','📄 '+(isWin?'💰':'📉')+' PAPER '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'%',reason+' held '+holdSecs.toFixed(0)+'s '+(pnlSOL>=0?'+':'')+pnlSOL.toFixed(4)+'◎');
+    return;
+  }
+  // ── LIVE CLOSE ─────────────────────────────────────────────────
+
+  const t0sell=performance.now();
+  try{
+    // Lightning sell — single server-side call
+    const tip=S.dynamicTip||0.0005;
+    const _ac2=new AbortController();
+    const _to2=setTimeout(()=>_ac2.abort(),3000);
+    const r=await fetch('https://pumpportal.fun/api/trade?api-key='+HC.ppKey,{
+      method:'POST',
+      headers:LIGHTNING_HEADERS,
+      body:buildSellBody(mint,tip),
+      keepalive:true,
+      signal:_ac2.signal,
+    });
+    clearTimeout(_to2);
+    if(!r.ok)throw new Error('Lightning sell '+r.status+': '+await r.text());
+    const sig=(await r.text()).trim().replace(/"/g,'');
+    const clMs=Math.round(performance.now()-t0sell);
+    const via='lightning';
+    // Update risk state
+    const isWin=pnlPct>0;
+    if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
+    S.totalPnl+=pnlSOL;
+    const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
+    if(isWin)st.wins++;else st.losses++;st.pnl+=pnlSOL;st.totalHold+=holdSecs;
+    // Circuit breaker (mirrors Rust circuit_breaker.rs)
+    if(S.risk.consec>=CFG.cbLimit){
+      S.risk.cb=true;
+      toast('⛔ CIRCUIT BREAKER: '+S.risk.consec+' losses','warn');
+      addFeed('warn','⛔ CIRCUIT BREAKER TRIPPED',''+S.risk.consec+' consecutive losses');
+    }
+    // PNL log
+    S.log.unshift({sym:pos.sym,mint,pnlPct,pnlSOL,reason,holdSecs,win:isWin,ts:Date.now()});
+    if(S.log.length>200)S.log.pop();
+    if(sig)S.pendingConf[sig]={mint,type:'sell',ts:Date.now()};
+    if(S.ws?.readyState===1)S.ws.send(WS_UNSUB_TOK(mint));
+    toast((isWin?'💰':'📉')+' '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'% '+Math.round(clMs)+'ms',isWin?'close':'loss');
+    addFeed(isWin?'win':'loss',(isWin?'💰':'📉')+' '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'%',reason+' held '+holdSecs.toFixed(0)+'s '+(pnlSOL>=0?'+':'')+pnlSOL.toFixed(4)+'◎');
+  }catch(err){
+    S.positions[mint]=pos; // re-add on failure
+    toast('❌ Sell failed: '+err.message.slice(0,50),'warn');
+    addFeed('warn','❌ Sell FAILED: '+pos.sym,err.message.slice(0,60));
+  }
+}
+
+// ── Multi-endpoint race (mirrors Rust executor.rs triple fan-out) ─
+async function raceSubmit(b64){
+  const sends=[];
+  // Jito bundle (NYC, MEV-protected)
+  if(CFG.jito&&S.jitoUrl){
+    sends.push((async()=>{
+      const r=await fetch(S.jitoUrl+'/api/v1/bundles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'sendBundle',params:[[b64]]})});
+      const d=await r.json();if(d.result&&!d.error)return{sig:d.result,via:'jito'};throw new Error('jito:'+JSON.stringify(d.error));
+    })());
+  }
+  // RPC sends
+  const body=JSON.stringify({jsonrpc:'2.0',id:1,method:'sendTransaction',params:[b64,{encoding:'base64',skipPreflight:CFG.skipPreflight,maxRetries:0}]});
+  S.rpcs.forEach((rpc,i)=>sends.push((async()=>{
+    const r=await fetch(rpc,{method:'POST',headers:{'Content-Type':'application/json'},body});
+    const d=await r.json();if(d.result&&!d.error)return{sig:d.result,via:'rpc'+(i+1)};throw new Error('rpc'+i);
+  })()));
+  return await Promise.any(sends);
+}
+
+// ── TX Confirmation poller (mirrors Rust confirmation.rs) ─────────
+async function confirmPoller(){
+  const sigs=Object.keys(S.pendingConf);if(!sigs.length)return;
+  const now=Date.now();
+  // Timeout old entries
+  for(const sig of sigs){if(now-S.pendingConf[sig].ts>35000){delete S.pendingConf[sig];}}
+  const alive=Object.keys(S.pendingConf);if(!alive.length)return;
+  try{
+    const r=await fetch(S.rpcs[0]||'https://api.mainnet-beta.solana.com',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({jsonrpc:'2.0',id:1,method:'getSignatureStatuses',params:[alive,{searchTransactionHistory:false}]}),
+    });
+    const data=await r.json();
+    (data?.result?.value||[]).forEach((v,i)=>{
+      const sig=alive[i];if(!sig||!S.pendingConf[sig])return;
+      if(!v)return;
+      if(v.err){const p=S.pendingConf[sig];if(p.type==='buy'&&S.positions[p.mint])S.positions[p.mint].status='failed';delete S.pendingConf[sig];return;}
+      if(v.confirmationStatus==='confirmed'||v.confirmationStatus==='finalized'){
+        const p=S.pendingConf[sig];if(p.type==='buy'&&S.positions[p.mint])S.positions[p.mint].status='confirmed';delete S.pendingConf[sig];
+      }
+    });
+  }catch(e){}
+}
+
+// ── Position monitor 250ms (mirrors Rust price_monitor.rs) ────────
+function posMonitor(){
+  // Pure copy trading — no auto-exits.
+  // Only exit triggers: alpha wallet mirror sell, or manual CLOSE ALL.
+  // posMonitor only tracks price for display purposes.
+  for(const[mint,pos]of Object.entries(S.positions)){
+    if(!pos.currentPrice||!pos.entryPrice)continue;
+    // Keep highPrice updated for display
+    if(pos.currentPrice>pos.highPrice)pos.highPrice=pos.currentPrice;
+  }
+}
+
+// ── Balance ───────────────────────────────────────────────────────
+async function refreshBal(){
+  try{
+    const conn=new solanaWeb3.Connection(S.rpcs[0]||'https://api.mainnet-beta.solana.com','confirmed');
+    S.balanceSol=(await conn.getBalance(new solanaWeb3.PublicKey(S.pubkey)))/1e9;
+    document.getElementById('h-bal').textContent=S.balanceSol.toFixed(3)+' ◎';
+  }catch(e){}
+}
+
+// ── Render ────────────────────────────────────────────────────────
+function renderUI(){
+  const tt=S.wins+S.losses,wr=tt>0?Math.round(S.wins/tt*100):0;
+  setV('s-pnl',(S.totalPnl>=0?'+':'')+S.totalPnl.toFixed(4),S.totalPnl>=0?'g':'r');
+  setV('s-wr',wr+'%',wr>=60?'g':wr>=40?'y':'r');
+  setV('s-pos',Object.keys(S.positions).length,'b');
+  setText('s-sig',S.signals);setText('s-day',S.risk.daily+'/'+CFG.daily);
+  const[ld50]=pcts(S.latDetect);const[le50,le95,le99]=pcts(S.latExec);
+  setLat('ld50',ld50);setLat('le50',le50);setLat('le95',le95);setLat('le99',le99);
+  // CB
+  document.getElementById('cbb').classList.toggle('on',S.risk.cb);
+  document.getElementById('cbmsg').textContent='⛔ CB — '+S.risk.consec+' CONSECUTIVE LOSSES';
+  document.getElementById('cblbl').textContent=S.risk.cb?'🔴 TRIPPED':'🟢 OK';
+  document.getElementById('cblbl').className=S.risk.cb?'r':'g';
+  document.getElementById('cb-sub').textContent=(S.risk.cb?'TRIPPED':'OK')+' — '+S.risk.consec+' consec';
+  setText('dd-s',S.risk.daily+'/'+CFG.daily);setText('upt',fmtUptime(Date.now()-S.startTime));setText('dedup-s',S.dedup.size);
+  // ML panel
+  const mAvg=S.mlStats.count>0?S.mlStats.totalMs/S.mlStats.count:0;
+  setText('ml-count',S.mlStats.count);setText('ml-speed',mAvg.toFixed(1)+'ms');setText('ml-blocked',S.mlStats.blocked);
+  if(S.mlStats.lastRug!==null){setText('ml-last-rug',(S.mlStats.lastRug*100).toFixed(1)+'%');document.getElementById('ml-last-rug').className='mlval '+(S.mlStats.lastRug>0.3?'r':'g');}
+  if(S.mlStats.lastPump!==null){setText('ml-last-pump',(S.mlStats.lastPump*100).toFixed(1)+'%');document.getElementById('ml-last-pump').className='mlval '+(S.mlStats.lastPump>0.55?'g':'r');}
+  if(S.mlStats.lastConf!==null)setText('ml-last-conf',(S.mlStats.lastConf*100).toFixed(1)+'%');
+  if(S.mlStats.lastKelly!==null)setText('ml-last-kelly',S.mlStats.lastKelly.toFixed(3)+'◎');
+  if(S.mlStats.lastDec!==null)setText('ml-last-dec',S.mlStats.lastDec);
+  // Active panel
+  const act=document.querySelector('.panel.on');
+  if(act?.id==='panel-pos')renderPos();
+  if(act?.id==='panel-wstats')renderWStats();
+  if(act?.id==='panel-log')renderLog();
+}
+
+function renderPos(){
+  const el=document.getElementById('plist');
+  const ps=Object.values(S.positions);
+  document.getElementById('pcnt').textContent=ps.length;
+  if(!ps.length){el.innerHTML='<div class="empty"><div class="ei">⏳</div><p>No open positions.<br>Monitoring 77 alpha wallets.</p></div>';return;}
+  el.innerHTML=ps.map(p=>{
+    const pnl=p.entryPrice>0?((p.currentPrice-p.entryPrice)/p.entryPrice)*100:0;
+    const isW=pnl>=0,dd=p.highPrice>0?((p.currentPrice-p.highPrice)/p.highPrice)*100:0;
+    const tPct=Math.max(0,100+dd),tColor=tPct>70?'var(--go)':tPct>40?'var(--hold)':'var(--stop)';
+    const held=((Date.now()-p.entryTime)/1000).toFixed(0);
+    const sc=p.status==='confirmed'?'var(--go)':p.status==='failed'?'var(--stop)':'var(--ink3)';
+    return`<div class="pcard ${isW?'pw':pnl<-2?'pl':'pn'}">
+<div class="pstatus" style="color:${sc}">${p.status||'pending'}·${held}s</div>
+<div class="pr1"><span class="psym">${p.sym}</span><span class="ppnl ${isW?'pw':'pl'}">${pnl>=0?'+':''}${pnl.toFixed(1)}%</span></div>
+<div class="tbarw"><div class="tbar" style="width:${tPct.toFixed(0)}%;background:${tColor}"></div></div>
+<div class="pr2">
+  <div class="pst"><span class="pv">${p.sizeSol.toFixed(3)}</span><span class="pl2">◎ in</span></div>
+  <div class="pst"><span class="pv">${held}s</span><span class="pl2">held</span></div>
+  <div class="pst"><span class="pv" style="color:var(--data)">#${p.walletRank}</span><span class="pl2">wallet</span></div>
+  <div class="pst"><span class="pv" style="color:var(--spark)">${(-dd).toFixed(1)}%</span><span class="pl2">trail</span></div>
+  <div class="pst"><span class="pv">${(p.conf*100).toFixed(0)}%</span><span class="pl2">conf</span></div>
+</div>
+<div class="pr3"><span class="ptier ${p.tier}">${p.tier==='S'?'⭐ S':'🥇 A'}-TIER</span><button class="pcbtn" onclick="doSell('${p.mint}','manual')">CLOSE</button></div>
+</div>`;
+  }).join('');
+}
+
+function renderWallets(){
+  const g=document.getElementById('wgrid');
+  const f=S.wFilter;
+  const list=WALLETS.filter(w=>{
+    if(f==='s')return w.tier==='S';if(f==='a')return w.tier==='A';
+    if(f==='hold')return Object.values(S.positions).some(p=>p.walletRank===w.rank);return true;
+  });
+  g.innerHTML=list.map(w=>{
+    const st=S.wstats[w.rank]||{};
+    const pnl=st.pnl!==undefined?(st.pnl>=0?'+':'')+st.pnl.toFixed(3):'+'+(w.pnl7d/1000).toFixed(1)+'k';
+    const h=Object.values(S.positions).some(p=>p.walletRank===w.rank);
+    return`<div class="wt ${w.tier}${h?' holds':''}" id="wt-${w.rank}" onclick="wDet(${w.rank})">
+<span class="wbdg ${w.tier}">${w.tier}</span>
+<span class="wrk">#${w.rank}</span>
+<span class="wwr">${(w.wr7d*100).toFixed(0)}%</span>
+<span class="wpnl">${pnl}</span>
+</div>`;
+  }).join('');
+}
+
+function renderWStats(){
+  const rows=WALLETS.map(w=>{
+    const st=S.wstats[w.rank]||{copies:0,wins:0,losses:0,pnl:0,totalHold:0};
+    const wr=st.copies>0?st.wins/Math.max(1,st.wins+st.losses):w.wr7d;
+    const avgHold=st.copies>0?st.totalHold/Math.max(1,st.wins+st.losses):0;
+    return{rank:w.rank,tier:w.tier,copies:st.copies,wins:st.wins,losses:st.losses,pnl:st.pnl,wr,avgHold};
+  });
+  const k=S.wSortKey,a=S.wSortAsc;
+  rows.sort((x,y)=>a?(x[k]>y[k]?1:-1):(x[k]<y[k]?1:-1));
+  document.getElementById('ws-cnt').textContent=rows.filter(r=>r.copies>0).length+'/77';
+  document.getElementById('wstbody').innerHTML=rows.map(r=>`
+<tr>
+<td style="color:${r.tier==='S'?'var(--go)':'var(--hold)'}">#${r.rank}</td>
+<td>${r.tier}</td><td>${r.copies}</td><td>${r.wins}</td>
+<td style="color:${r.wr>=0.6?'var(--go)':r.wr>=0.5?'var(--hold)':'var(--stop)'}">${(r.wr*100).toFixed(0)}%</td>
+<td style="color:${r.pnl>=0?'var(--go)':'var(--stop)'}">${r.pnl>=0?'+':''}${r.pnl.toFixed(3)}</td>
+<td style="color:var(--ink2)">${r.copies>0?r.avgHold.toFixed(0)+'s':'--'}</td>
+</tr>`).join('');
+}
+function sortW(k){if(S.wSortKey===k)S.wSortAsc=!S.wSortAsc;else{S.wSortKey=k;S.wSortAsc=true;}renderWStats();}
+
+function renderLog(){
+  const el=document.getElementById('llist');
+  document.getElementById('lcnt').textContent=S.log.length;
+  if(!S.log.length){el.innerHTML='<div class="empty"><div class="ei">📊</div><p>Closed trades appear here.</p></div>';return;}
+  el.innerHTML=S.log.slice(0,80).map(t=>`
+<div class="lrow ${t.win?'win':'loss'}">
+<div><div class="lsym">${t.sym}</div><div class="lrsn">${t.reason}</div><div class="lhld">held ${t.holdSecs.toFixed(0)}s</div></div>
+<div><div class="lpnl ${t.win?'win':'loss'}">${t.pnlPct>=0?'+':''}${t.pnlPct.toFixed(1)}%</div><div class="lsol">${t.pnlSOL>=0?'+':''}${t.pnlSOL.toFixed(4)}◎</div></div>
+</div>`).join('');
+}
+
+// ── CSV Export (mirrors Rust pnl.rs) ─────────────────────────────
+function exportCSV(){
+  if(!S.log.length){toast('No trades to export','info');return;}
+  const hdr='timestamp,symbol,mint,pnl_pct,pnl_sol,reason,hold_secs,win\n';
+  const rows=S.log.map(t=>[new Date(t.ts).toISOString(),t.sym,t.mint||'',t.pnlPct.toFixed(4),t.pnlSOL.toFixed(6),t.reason,t.holdSecs.toFixed(1),t.win?1:0].join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([hdr+rows],{type:'text/csv'}));
+  a.download='mchpai_pnl_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
+  toast('⬇ CSV exported ('+S.log.length+' trades)','info');
+}
+
+// ── Feed ──────────────────────────────────────────────────────────
+function addFeed(dot,title,sub){
+  const ts=Date.now();S.feed.unshift({dot,title,sub,ts});if(S.feed.length>80)S.feed.pop();
+  document.getElementById('fcnt').textContent=S.feed.length;
+  if(document.getElementById('panel-feed').classList.contains('on')){
+    const el=document.getElementById('flist');
+    if(el.querySelector('.empty'))el.innerHTML='';
+    const it=document.createElement('div');it.className='fi';
+    it.innerHTML=`<div class="fdot ${dot}"></div><div class="fb"><div class="ft">${title}</div><div class="fs">${sub||''}</div></div><div class="ftm">now</div>`;
+    el.insertBefore(it,el.firstChild);if(el.children.length>40)el.removeChild(el.lastChild);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+function setText(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
+function setV(id,v,cls){const e=document.getElementById(id);if(!e)return;e.textContent=v;e.className='v '+cls;}
+function setLat(id,ms){const e=document.getElementById(id);if(!e)return;e.textContent=ms>0?ms.toFixed(0)+'ms':'--ms';e.className='lv '+(ms<50?'g':ms<100?'y':'r');}
+function setBadge(on){const b=document.getElementById('wsbdg'),l=document.getElementById('wslbl');b.className='wsbdg '+(on?'live':'dead');l.textContent=on?'LIVE':'OFF';}
+function toast(msg,type){const c=document.getElementById('tc');const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;c.appendChild(t);setTimeout(()=>{if(t.parentNode)t.parentNode.removeChild(t);},3100);}
+function flashW(rank){const e=document.getElementById('wt-'+rank);if(!e)return;e.classList.add('fire');setTimeout(()=>e.classList.remove('fire'),2200);}
+function fmtUptime(ms){const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?h+'h '+m+'m':m>0?m+'m '+(s%60)+'s':(s%60)+'s';}
+function pcts(arr){if(!arr.length)return[0,0,0];const s=[...arr].sort((a,b)=>a-b);const n=s.length;return[s[Math.floor(n*0.50)]||0,s[Math.floor(n*0.95)]||0,s[Math.min(n-1,Math.floor(n*0.99))]||0];}
+
+// ── Tabs ──────────────────────────────────────────────────────────
+function tab(name,btn){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.tab,.nb').forEach(b=>b.classList.remove('on'));
+  document.getElementById('panel-'+name).classList.add('on');btn.classList.add('on');
+  const nbMap={'pos':0,'feed':1,'wallets':2,'log':3,'settings':4};
+  if(nbMap[name]!==undefined)document.querySelectorAll('.nb')[nbMap[name]]?.classList.add('on');
+  if(name==='wallets')renderWallets();if(name==='wstats')renderWStats();if(name==='log')renderLog();
+  if(name==='feed'){
+    const el=document.getElementById('flist');
+    if(S.feed.length&&el.querySelector('.empty'))
+      el.innerHTML=S.feed.map(f=>`<div class="fi"><div class="fdot ${f.dot}"></div><div class="fb"><div class="ft">${f.title}</div><div class="fs">${f.sub||''}</div></div><div class="ftm">${Math.floor((Date.now()-f.ts)/1000)}s</div></div>`).join('');
+  }
+}
+function wf(f,btn){S.wFilter=f;document.querySelectorAll('.wfb').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderWallets();}
+
+// ── Settings adj ──────────────────────────────────────────────────
+const _adj={
+  size:[1,500,'size','sol'],minsize:[1,100,'minsize','sol'],res:[1,100,'res','sol'],
+  cb:[1,20,'cbLimit',''],daily:[5,200,'daily',''],maxpos:[1,20,'maxpos',''],tip:[100000,5000000,'tipLamports','k']};
+const _ids={size:'sv-sz',minsize:'sv-mn',res:'sv-rs',cb:'sv-cb',daily:'sv-dl',maxpos:'sv-mp',tip:'sv-tip'};
+const _fmt={size:v=>(v/100).toFixed(2)+'◎',minsize:v=>(v/100).toFixed(2)+'◎',res:v=>(v/100).toFixed(2)+'◎',cb:v=>''+v,daily:v=>''+v,maxpos:v=>''+v,tip:v=>Math.round(v/1000)+'k'};
+function adj(k,d){
+  const[mn,mx,ck]=_adj[k];
+  CFG[ck]=Math.max(mn,Math.min(mx,CFG[ck]+d));
+  setText(_ids[k],_fmt[k](CFG[ck]));saveCfg();
+}
+function applyUI(){
+  Object.keys(_ids).forEach(k=>setText(_ids[k],_fmt[k](CFG[_adj[k][2]])));
+  ['jito','skip','mirror','kelly'].forEach(k=>{const e=document.getElementById('t-'+k);if(e)e.checked=CFG[k==='skip'?'skipPreflight':k==='jito'?'jito':k==='mirror'?'mirrorExit':'kelly'];});
+}
+
+// ── Commands ──────────────────────────────────────────────────────
+function closeAll(){if(!confirm('Close ALL?'))return;Object.keys(S.positions).forEach(m=>doSell(m,'manual_close_all'));}
+function resetCB(){S.risk.cb=false;S.risk.consec=0;document.getElementById('cbb').classList.remove('on');toast('✅ CB reset','trade');addFeed('info','CB reset','');}
+let _p=false;
+function togglePause(){_p=!_p;S.paused=_p;setText('pbtn',_p?'▶ RESUME COPY TRADING':'⏸ PAUSE COPY TRADING');toast(_p?'⏸ Paused':'▶ Resumed','info');}
+function wDet(r){const w=WALLETS[r-1],st=S.wstats[r]||{};toast('W#'+r+'['+w.tier+'] '+(w.wr7d*100).toFixed(0)+'%WR $'+w.pnl7d.toLocaleString()+'/7d copies='+st.copies,'info');}
+
+// ── Graceful shutdown (mirrors Rust Ctrl+C handler) ───────────────
+window.addEventListener('beforeunload',e=>{
+  if(Object.keys(S.positions).length>0){
+    e.preventDefault();e.returnValue='You have open positions. Close them before leaving.';
+    Object.keys(S.positions).forEach(m=>doSell(m,'page_close'));
+  }
+});
+
+// ── Init ──────────────────────────────────────────────────────────
+loadCfg();applyUI();
+try{const r1=localStorage.getItem('m_r1'),r2=localStorage.getItem('m_r2');if(r1)document.getElementById('rpc1').value=r1;if(r2)document.getElementById('rpc2').value=r2;}catch(e){}
+setInterval(()=>document.querySelectorAll('.ftm').forEach((el,i)=>{if(S.feed[i])el.textContent=Math.floor((Date.now()-S.feed[i].ts)/1000)+'s';}),10000);
+
+</script>
+<script>document.addEventListener("DOMContentLoaded", autoLaunch);</script>
+</body>
+</html>
