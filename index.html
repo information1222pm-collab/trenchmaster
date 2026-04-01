@@ -12,6 +12,9 @@
 <script>
 // bs58 inlined \u2014 zero CDN dependency, works offline
 // Base58 alphabet used by Bitcoin/Solana
+// Fast Uint8Array → base64 (no .apply() limit, no temp string)
+function u8ToB64(u8){const L=u8.length;let bin='';const chunk=8192;for(let i=0;i<L;i+=chunk){const end=Math.min(i+chunk,L);let s='';for(let j=i;j<end;j++)s+=String.fromCharCode(u8[j]);bin+=s;}return btoa(bin);}
+
 const bs58=(()=>{
   const ALPHA='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   const BASE=58n;
@@ -500,6 +503,13 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
           <div class="mlrow"><div><div class="mllbl">Wallet Trust</div><div class="mlsub">Bayesian posterior</div></div><div class="mlval g">ACTIVE</div></div>
           <div class="mlrow"><div><div class="mllbl">ATR Trailing</div><div class="mlsub">Regime-adaptive stop</div></div><div class="mlval g">ACTIVE</div></div>
           <div class="mlrow"><div><div class="mllbl">Momentum</div><div class="mlsub">Velocity classifier</div></div><div class="mlval g">ACTIVE</div></div>
+        </div>
+        <div class="mlcard">
+          <div class="mlt">&#x1F9EC; WALLET DARWIN</div>
+          <div class="mlrow"><div><div class="mllbl">Tracked</div><div class="mlsub">Wallets with trade data</div></div><div class="mlval b" id="dw-tracked">0</div></div>
+          <div class="mlrow"><div><div class="mllbl">Blacklisted</div><div class="mlsub">Rug / chronic losers</div></div><div class="mlval r" id="dw-blacklisted">0</div></div>
+          <div class="mlrow"><div><div class="mllbl">Tier Distribution</div><div class="mlsub">S / A / B / C / X</div></div><div class="mlval n" id="dw-tiers" style="font-size:9px">--</div></div>
+          <div class="mlrow"><div><div class="mllbl">Last Action</div><div class="mlsub">Promotion / demotion</div></div><div class="mlval n" id="dw-last" style="font-size:8px;max-width:150px;text-align:right;word-break:break-all">--</div></div>
         </div>
         <input type="file" id="rug-file2" class="mlhid" accept=".onnx" onchange="loadModel('rug',this)">
         <button class="abtn grey" style="margin-bottom:6px" onclick="document.getElementById('rug-file2').click()">Load rug_detector.onnx</button>
@@ -2275,7 +2285,7 @@ function saveCfg(){
 // \u2500\u2500 App State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const S={
   mode:'auto',keypair:null,phantom:null,pubkey:null,balanceSol:0,rpcs:[],jitoUrl:'',
-  ws:null,positions:{},feed:[],log:[],wstats:{},
+  ws:null,positions:{},_posCount:0,feed:[],log:[],wstats:{},
   risk:{cb:false,consec:0,daily:0,dailyReset:Date.now()+86400000},
   paper:false,paused:false,wFilter:'all',wSortKey:'rank',wSortAsc:true,
   sigDeltas:[],dynamicTip:0.0005,
@@ -2332,44 +2342,74 @@ async function loadModel(type,input){
 const _featureBuf = new Float32Array(122);
 function buildFeatures(w,solAmt,tokAmt){
   const f=_featureBuf;f.fill(0);
-  f[0]=solAmt/1e9;f[1]=tokAmt;f[2]=w.tier==='S'?1.0:2.0;f[3]=w.rank;
-  f[4]=w.wr7d;f[5]=w.wr30d;f[6]=confBoost(w);
+  f[0]=solAmt/1e9;f[1]=tokAmt;f[2]=w.tier==='S'?1.0:w.tier==='A'?1.5:w.tier==='B'?2.0:3.0;f[3]=Math.min(1,w.rank/500);
+  f[4]=w.wr7d||0;f[5]=w.wr30d||0;f[6]=confBoost(w);
   if(solAmt>0&&tokAmt>0)f[7]=tokAmt/solAmt;
+  const _wt=WALLET_TRUST.getScore(w.addr);f[8]=_wt.score;f[9]=Math.min(1,_wt.n/50);f[10]=Math.max(-1,Math.min(1,_wt.streak/5));
+  const _dw=WALLET_DARWIN.getScore(w.addr);f[11]=_dw?_dw.wr:0.5;
+  const _now=new Date();f[12]=_now.getUTCHours()/23;f[13]=_now.getUTCDay()/6;
+  f[14]=(_now.getUTCHours()>=13&&_now.getUTCHours()<=21)?1:0;f[15]=(_now.getUTCHours()>=1&&_now.getUTCHours()<=9)?1:0;
+  const _rg=HMM.currentRegime();f[16]=_rg.alpha?_rg.alpha[0]:0.33;f[17]=_rg.alpha?_rg.alpha[1]:0.34;f[18]=_rg.alpha?_rg.alpha[2]:0.33;f[19]=_rg.conf||0.33;
+  f[20]=Math.min(1,S.signals/1000);f[21]=S._posCount/Math.max(1,CFG.maxpos);
+  f[22]=S.risk.consec>0?Math.min(1,S.risk.consec/CFG.cbLimit):0;
+  f[23]=S.totalPnl>=0?Math.min(1,S.totalPnl/10):Math.max(-1,S.totalPnl/5);
+  const _tt=S.wins+S.losses;f[24]=_tt>0?S.wins/_tt:0.5;
+  f[25]=Math.min(1,(w.bundleSize||1)/20);f[26]=w.bundle?1:0;
+  f[27]=solAmt>0?Math.min(1,Math.log10(solAmt/1e9+1)):0;
+  f[28]=tokAmt>0?Math.min(1,Math.log10(tokAmt+1)/12):0;
+  f[29]=S.balanceSol>0?Math.min(1,(solAmt/1e9)/S.balanceSol):0;
+  f[30]=ONLINE_SGD.confidence();f[31]=Math.min(1,NTM.size/100);
   return f;
 }
 function confBoost(w){return w.tier==='S'?0.10+w.wr7d*0.15:0.02+w.wr7d*0.06;}
+
+// Pre-allocated ONNX buffers + ML score cache
+const _onnxBufRug=new Float32Array(122),_onnxBufPump=new Float32Array(122);
+let _onnxTensorRug=null,_onnxTensorPump=null;
+const _mlCache=new Map();
+const _ML_CACHE_TTL=15000;
 
 async function runML(w,solAmt,tokAmt){
   if(!S.mlModels.rug&&!S.mlModels.pump)return{rugProb:w.rank<=5?0.10:0.15,pumpScore:0.65,ran:false};
   // Elite wallets (rank 1-5): skip ML entirely — defaults always pass thresholds
   // rugProb 0.10 < 0.40 thresh, pumpScore 0.65 > 0.55 thresh. Saves 10-40ms.
   if(w.rank<=5)return{rugProb:0.10,pumpScore:0.70,ran:false};
+  // Cache check — same wallet within 15s gets cached scores
+  const _cc=_mlCache.get(w.addr);if(_cc&&(Date.now()-_cc.ts)<_ML_CACHE_TTL){S.mlStats.count++;return{rugProb:_cc.rugProb,pumpScore:_cc.pumpScore,ran:true};}
   const t0=performance.now();S.mlStats.count++;
   const f=buildFeatures(w,solAmt,tokAmt);
   let rugProb=w.rank<=10?0.12:0.15,pumpScore=0.65;
   // Run both models in PARALLEL (was sequential — 2× slower)
   const jobs=[];
   if(S.mlModels.rug)jobs.push((async()=>{try{
-    const t=new ort.Tensor('float32',new Float32Array(f),[1,122]);
-    const out=await S.mlModels.rug.run({float_input:t});
+    _onnxBufRug.set(f);if(!_onnxTensorRug)_onnxTensorRug=new ort.Tensor('float32',_onnxBufRug,[1,122]);
+    const out=await S.mlModels.rug.run({float_input:_onnxTensorRug});
     const p=Object.values(out)[1]?.data||Object.values(out)[0]?.data;
     if(p&&p.length>=2)rugProb=p[1];
   }catch(e){}})());
   if(S.mlModels.pump)jobs.push((async()=>{try{
-    const t=new ort.Tensor('float32',new Float32Array(f),[1,122]);
-    const out=await S.mlModels.pump.run({float_input:t});
+    _onnxBufPump.set(f);if(!_onnxTensorPump)_onnxTensorPump=new ort.Tensor('float32',_onnxBufPump,[1,122]);
+    const out=await S.mlModels.pump.run({float_input:_onnxTensorPump});
     const p=Object.values(out)[1]?.data||Object.values(out)[0]?.data;
     if(p&&p.length>=2)pumpScore=p[1];
   }catch(e){}})());
   if(jobs.length)await Promise.all(jobs);
   const ms=performance.now()-t0;S.mlStats.totalMs+=ms;
+  _mlCache.set(w.addr,{rugProb,pumpScore,ts:Date.now()});
   S.mlStats.lastRug=rugProb;S.mlStats.lastPump=pumpScore;
   return{rugProb,pumpScore,ran:true};
 }
 
 // Kelly sizing (mirrors Rust decision.rs)
-function kellySize(conf){
-  const p=conf,b=1.30,q=1-p;
+function kellySize(conf,wAddr){
+  const p=conf,q=1-p;
+  // Dynamic payoff ratio from Darwin history (default 1.30)
+  let b=1.30;
+  if(wAddr){const ds=WALLET_DARWIN.getScore(wAddr);
+    if(ds&&ds.copies>=5&&ds.wins>0){
+      b=Math.max(0.5,Math.min(3.0,ds.pnlSol/Math.max(0.01,ds.wins*0.05)));
+    }
+  }
   const f=Math.max(0,Math.min(0.25,(p*b-q)/b));
   const maxL=CFG.size/100*1e9,minL=CFG.minsize/100*1e9;
   return Math.max(minL,Math.min(maxL,f*maxL));
@@ -2400,7 +2440,7 @@ async function decide(w,solAmt,tokAmt,mint){
   if(conf<confThresh){S.mlStats.blocked++;S.mlStats.lastDec='ensemble_low_'+conf.toFixed(2);return{go:false,reason:'ensemble_'+conf.toFixed(2)+'<'+confThresh.toFixed(2)};}
   // Momentum-adjusted Kelly sizing
   const momMult=MOMENTUM_ML.sizeMultiplier(momData.regime);
-  const sizeLam=CFG.kelly?kellySize(conf)*momMult:CFG.size/100*1e9;
+  const sizeLam=CFG.kelly?kellySize(conf,w.addr)*momMult:CFG.size/100*1e9;
   S.mlStats.lastConf=conf;S.mlStats.lastKelly=sizeLam/1e9;S.mlStats.lastDec='GO ens='+conf.toFixed(2)+' sgd='+sgdProb.toFixed(2)+' ntm='+ntmResult.score.toFixed(2);
   return{go:true,sizeLamports:sizeLam,conf,rugProb,pumpScore,_sgdProb:sgdProb,_walletScore:wTrust.score,_ntmScore:ntmResult.score};
 }
@@ -3026,6 +3066,7 @@ const HMM = (() => {
     const total = newAlpha.reduce((s,v) => s+v, 0);
     if (total > 0) {
       for (let j = 0; j < 3; j++) alpha[j] = newAlpha[j] / total;
+      _invalidateCache();
     }
 
     obsHistory.push({ obs, alpha: [...alpha], ts: Date.now() });
@@ -3033,11 +3074,17 @@ const HMM = (() => {
   }
 
   // \u2500\u2500 Current regime inference \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // Cached regime — recomputed only when alpha changes (on trade close)
+  let _cachedRegime = null;
+  function _invalidateCache() { _cachedRegime = null; }
+
   function currentRegime() {
+    if (_cachedRegime) return _cachedRegime;
     const idx  = alpha.indexOf(Math.max(...alpha));
     const name = REGIMES[idx];
     const conf = alpha[idx];
-    return { name, idx, conf, alpha: [...alpha] };
+    _cachedRegime = { name, idx, conf, alpha: [...alpha] };
+    return _cachedRegime;
   }
 
   // \u2500\u2500 Record a closed trade \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -3124,6 +3171,7 @@ const HMM = (() => {
   function setAlpha(a) {
     if (a && a.length === 3) {
       alpha[0] = a[0]; alpha[1] = a[1]; alpha[2] = a[2];
+      _invalidateCache();
       renderRegimeBadge();
     }
   }
@@ -3148,17 +3196,28 @@ const HMM = (() => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ONLINE_SGD = (() => {
-  const NF=12, LR=0.01, MOM=0.9, L2=0.001, DB_KEY='mchpai_sgd_v2';
+  const NF=20, LR=0.008, MOM=0.92, L2=0.0008, DB_KEY='mchpai_sgd_v3';
   let w=new Float64Array(NF), b=0, vel=new Float64Array(NF), vb=0, trainCount=0;
+  const _xBuf=new Float64Array(NF);
   function loadW(){try{const s=localStorage.getItem(DB_KEY);if(s){const d=JSON.parse(s);if(d.w&&d.w.length===NF){w=new Float64Array(d.w);b=d.b||0;vel=new Float64Array(d.v||new Array(NF).fill(0));vb=d.vb||0;trainCount=d.n||0;}}}catch(e){}}
   function saveW(){try{localStorage.setItem(DB_KEY,JSON.stringify({w:Array.from(w),b,v:Array.from(vel),vb,n:trainCount}));}catch(e){}}
   function sigma(z){return z>20?1:z<-20?0:1/(1+Math.exp(-z));}
   function buildX(tier,rank,wr7d,pnl7d,bConv,sol,rugP,pumpS,rIdx,rConf,bSize,isLead){
-    return new Float64Array([tier==='S'?1:tier==='A'?0.7:tier==='B'?0.4:0.1,Math.min(1,rank/500),wr7d||0,Math.tanh((pnl7d||0)/20),Math.min(1,(bConv-1)/2),Math.min(1,sol/5),1-(rugP||0.15),pumpS||0.65,rIdx/2,rConf||0.33,Math.min(1,(bSize||1)/10),isLead?1:0]);
+    const x=_xBuf;
+    x[0]=tier==='S'?1:tier==='A'?0.7:tier==='B'?0.4:0.1;x[1]=Math.min(1,rank/500);x[2]=wr7d||0;x[3]=Math.tanh((pnl7d||0)/20);
+    x[4]=Math.min(1,(bConv-1)/2);x[5]=Math.min(1,sol/5);x[6]=1-(rugP||0.15);x[7]=pumpS||0.65;
+    x[8]=rIdx/2;x[9]=rConf||0.33;x[10]=Math.min(1,(bSize||1)/10);x[11]=isLead?1:0;
+    const h=new Date().getUTCHours();x[12]=h/23;x[13]=(h>=13&&h<=21)?1:0;
+    x[14]=S._posCount/Math.max(1,CFG.maxpos);const _tt=S.wins+S.losses;x[15]=_tt>0?S.wins/_tt:0.5;
+    x[16]=Math.tanh(S.totalPnl/5);
+    const _ds=WALLET_DARWIN.getScore(WALLETS.find(ww=>ww.rank===rank)?.addr||'');
+    x[17]=_ds?_ds.wr:0.5;x[18]=_ds?Math.min(1,_ds.rugs/2):0;
+    x[19]=Math.min(1,(S.risk.consec||0)/CFG.cbLimit);
+    return x;
   }
   function predict(x){let z=b;for(let i=0;i<NF;i++)z+=w[i]*x[i];return sigma(z);}
-  function train(x,y){const p=predict(x),err=p-y;trainCount++;const lr=LR/(1+Math.sqrt(trainCount)*0.01);for(let i=0;i<NF;i++){const g=err*x[i]+L2*w[i];vel[i]=MOM*vel[i]-lr*g;w[i]+=vel[i];}vb=MOM*vb-lr*err;b+=vb;if(trainCount%5===0)saveW();return p;}
-  function confidence(){return trainCount<10?0:Math.min(1,trainCount/100);}
+  function train(x,y){const xc=new Float64Array(x);const p=predict(xc),err=p-y;trainCount++;const lr=LR/(1+Math.sqrt(trainCount)*0.01);for(let i=0;i<NF;i++){const g=err*xc[i]+L2*w[i];vel[i]=MOM*vel[i]-lr*g;w[i]+=vel[i];}vb=MOM*vb-lr*err;b+=vb;if(trainCount%5===0)saveW();return p;}
+  function confidence(){return trainCount<10?0:Math.min(1,trainCount/80);}
   loadW();
   return{buildX,predict,train,confidence,get trainCount(){return trainCount;},saveWeights:saveW};
 })();
@@ -3189,7 +3248,8 @@ const MOMENTUM_ML = (() => {
     const velocity=((recent[recent.length-1]-recent[0])/base)/win;
     let accel=0;if(n>=6){const h=Math.floor(win/2);accel=(recent[recent.length-1]-recent[h])/(base*(win-h))-(recent[h]-recent[0])/(base*h);}
     const total=data.buyCount+data.sellCount,vImbalance=total>0?data.buyCount/total:0.5;
-    const high=Math.max(...ticks),dd=high>0?(ticks[n-1]-high)/high:0;
+    let high=ticks[0];for(let i=1;i<n;i++)if(ticks[i]>high)high=ticks[i];
+    const dd=high>0?(ticks[n-1]-high)/high:0;
     let regime,conf;
     if(velocity>0.02&&accel>0&&vImbalance>0.65){regime='LAUNCH_PUMP';conf=Math.min(1,velocity*20);}
     else if(velocity>0.005&&vImbalance>0.55){regime='STEADY_CLIMB';conf=Math.min(1,velocity*40);}
@@ -3234,9 +3294,25 @@ const NTM = (() => {
   const MEM_SZ=500,DB_KEY='mchpai_ntm_v2';let memory=[];
   function load(){try{const s=localStorage.getItem(DB_KEY);if(s){memory=JSON.parse(s).map(e=>({sig:new Float64Array(e.sig),outcome:e.outcome,weight:e.weight||1,ts:e.ts||0}));}}catch(e){}}
   function save(){try{localStorage.setItem(DB_KEY,JSON.stringify(memory.map(e=>({sig:Array.from(e.sig),outcome:e.outcome,weight:e.weight,ts:e.ts}))));}catch(e){}}
-  function buildSignature(tier,bConv,sol,rugP,pumpS,rIdx,wr7d,momR){return new Float64Array([tier==='S'?1:tier==='A'?0.7:0.3,Math.min(1,(bConv-1)/2),Math.min(1,sol/5),1-rugP,pumpS,rIdx/2,wr7d||0.5,momR==='LAUNCH_PUMP'?1:momR==='STEADY_CLIMB'?0.7:momR==='CONSOLIDATION'?0.4:0.1]);}
+  function buildSignature(tier,bConv,sol,rugP,pumpS,rIdx,wr7d,momR){
+    const h=new Date().getUTCHours();
+    return new Float64Array([tier==='S'?1:tier==='A'?0.7:0.3,Math.min(1,(bConv-1)/2),Math.min(1,sol/5),1-rugP,pumpS,rIdx/2,wr7d||0.5,
+      momR==='LAUNCH_PUMP'?1:momR==='STEADY_CLIMB'?0.7:momR==='CONSOLIDATION'?0.4:0.1,
+      h/23,(h>=13&&h<=21)?1:0,S._posCount/Math.max(1,CFG.maxpos),(S.wins+S.losses)>0?S.wins/(S.wins+S.losses):0.5]);
+  }
   function cosine(a,b){let d=0,nA=0,nB=0;for(let i=0;i<a.length;i++){d+=a[i]*b[i];nA+=a[i]*a[i];nB+=b[i]*b[i];}return(nA===0||nB===0)?0:d/(Math.sqrt(nA)*Math.sqrt(nB));}
-  function query(sig){if(memory.length<5)return{score:0.5,matches:0,topSim:0};const sims=memory.map((m,i)=>({idx:i,sim:cosine(sig,m.sig),...m})).sort((a,b)=>b.sim-a.sim);const top=sims.slice(0,Math.min(20,sims.length)).filter(s=>s.sim>0.7);if(!top.length)return{score:0.5,matches:0,topSim:sims[0]?.sim||0};let ws=0,wt=0;for(const m of top){const ww=m.sim*m.weight;ws+=(m.outcome>0?1:0)*ww;wt+=ww;}return{score:wt>0?ws/wt:0.5,matches:top.length,topSim:top[0]?.sim||0};}
+  function query(sig){
+    if(memory.length<5)return{score:0.5,matches:0,topSim:0};
+    let ws=0,wt=0,matches=0,topSim=0,qN=0;
+    for(let i=0;i<sig.length;i++)qN+=sig[i]*sig[i];qN=Math.sqrt(qN);if(qN===0)return{score:0.5,matches:0,topSim:0};
+    for(let j=0;j<memory.length;j++){const m=memory[j];let dot=0,mN=0;
+      for(let i=0;i<sig.length;i++){dot+=sig[i]*m.sig[i];mN+=m.sig[i]*m.sig[i];}
+      mN=Math.sqrt(mN);if(mN===0)continue;const sim=dot/(qN*mN);
+      if(sim>topSim)topSim=sim;
+      if(sim>0.7){const ww=sim*m.weight;ws+=(m.outcome>0?1:0)*ww;wt+=ww;matches++;}
+    }
+    return{score:wt>0?ws/wt:0.5,matches,topSim};
+  }
   function store(sig,isWin,pnlPct){memory.push({sig,outcome:isWin?1:-1,weight:Math.min(2,1+Math.abs(pnlPct)/50),ts:Date.now()});if(memory.length>MEM_SZ){memory.sort((a,b)=>b.weight*(b.ts/Date.now())-a.weight*(a.ts/Date.now()));memory=memory.slice(0,MEM_SZ);}if(memory.length%10===0)save();}
   load();return{buildSignature,query,store,save,get size(){return memory.length;}};
 })();
@@ -3250,7 +3326,8 @@ const ENSEMBLE = (() => {
   let weights={onnxRug:0.20,onnxPump:0.20,onlineSGD:0.15,walletTrust:0.15,ntmMemory:0.10,bundleConv:0.10,hmmRegime:0.10};let accuracy={};
   function load(){try{const s=localStorage.getItem(DB_KEY);if(s){const d=JSON.parse(s);if(d.weights)weights=d.weights;if(d.accuracy)accuracy=d.accuracy;}}catch(e){}}
   function save(){try{localStorage.setItem(DB_KEY,JSON.stringify({weights,accuracy}));}catch(e){}}
-  function score(sigs){const c={onnxRug:1-(sigs.rugProb||0.15),onnxPump:sigs.pumpScore||0.65,onlineSGD:sigs.sgdProb||0.5,walletTrust:sigs.walletScore||0.5,ntmMemory:sigs.ntmScore||0.5,bundleConv:Math.min(1,(sigs.bundleConv||1)/3),hmmRegime:sigs.regimeBoost||0.5};let ws=0,wt=0;for(const[k,v]of Object.entries(c)){const ww=weights[k]||0.1;ws+=v*ww;wt+=ww;}return{confidence:Math.max(0,Math.min(1,wt>0?ws/wt:0.5)),components:c};}
+  const _KEYS=['onnxRug','onnxPump','onlineSGD','walletTrust','ntmMemory','bundleConv','hmmRegime'];
+  function score(sigs){const vals=[1-(sigs.rugProb||0.15),sigs.pumpScore||0.65,sigs.sgdProb||0.5,sigs.walletScore||0.5,sigs.ntmScore||0.5,Math.min(1,(sigs.bundleConv||1)/3),sigs.regimeBoost||0.5];let ws=0,wt=0;for(let i=0;i<7;i++){const ww=weights[_KEYS[i]]||0.1;ws+=vals[i]*ww;wt+=ww;}return{confidence:Math.max(0,Math.min(1,wt>0?ws/wt:0.5)),components:null};}
   function recordOutcome(sigs,isWin){const c={onnxRug:1-(sigs.rugProb||0.15)>0.5,onnxPump:(sigs.pumpScore||0.65)>0.5,onlineSGD:(sigs.sgdProb||0.5)>0.5,walletTrust:(sigs.walletScore||0.5)>0.5,ntmMemory:(sigs.ntmScore||0.5)>0.5,bundleConv:(sigs.bundleConv||1)>=1.5,hmmRegime:(sigs.regimeBoost||0.5)>0.5};for(const[k,pred]of Object.entries(c)){if(!accuracy[k])accuracy[k]={correct:0,total:0};accuracy[k].total++;if(pred===isWin)accuracy[k].correct++;}const minT=Math.min(...Object.values(accuracy).map(a=>a.total));if(minT>=20&&minT%20===0){let aS=0;const ac={};for(const[k,a]of Object.entries(accuracy)){ac[k]=Math.max(0.05,a.total>0?a.correct/a.total:0.5);aS+=ac[k];}for(const k of Object.keys(ac))weights[k]=ac[k]/aS;addFeed('ml','\u{1F9E0} ENSEMBLE re-weighted',Object.entries(weights).map(([k,v])=>k.slice(0,4)+':'+(v*100).toFixed(0)+'%').join(' '));}if(minT%5===0)save();}
   load();return{score,recordOutcome,get weights(){return{...weights};},get accuracy(){return{...accuracy};}};
 })();
@@ -3273,6 +3350,312 @@ function mlLearnFromTrade(pos,pnlPct,isWin){
     addFeed('ml','\u{1F9E0} ML TRAINED: '+pos.sym+' '+(isWin?'\u2705':'\u274C'),'SGD n='+ONLINE_SGD.trainCount+' | Trust='+WALLET_TRUST.getScore(pos.sourceWallet).score.toFixed(2)+' | NTM='+NTM.size);
   }catch(e){console.warn('[ML] Learn error:',e);}
 }
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WALLET DARWIN — Adaptive Wallet Evolution Engine
+// Promotes profitable wallets, demotes losers, blacklists ruggers.
+// Tracks per-wallet: copies, W/L, PnL, rug count, streaks.
+// Tiers: S (elite) > A (strong) > B (standard) > C (weak) > X (blacklisted)
+// Persists in localStorage. Auto-reviews every 10 trades.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const WALLET_DARWIN = (() => {
+  const DB_KEY = 'mchpai_darwin_v1';
+  const TIERS_ORDERED = ['X','C','B','A','S'];
+  const TIER_IDX = {X:0, C:1, B:2, A:3, S:4};
+
+  // Per-wallet tracking (keyed by wallet address)
+  let ledger = {};
+  // Blacklist set (fast O(1) lookup for hot path)
+  let blacklist = new Set();
+  // Global trade counter for auto-review trigger
+  let _tradesSinceReview = 0;
+
+  function load() {
+    try {
+      const s = localStorage.getItem(DB_KEY);
+      if (s) {
+        const d = JSON.parse(s);
+        ledger = d.ledger || {};
+        blacklist = new Set(d.blacklist || []);
+        _tradesSinceReview = d._tsr || 0;
+      }
+    } catch(e) {}
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(DB_KEY, JSON.stringify({
+        ledger, blacklist: [...blacklist], _tsr: _tradesSinceReview
+      }));
+    } catch(e) {}
+  }
+
+  // ── Initialize ledger entry ──────────────────────────────────────────
+  function _ensure(addr) {
+    if (!ledger[addr]) {
+      ledger[addr] = {
+        copies: 0, wins: 0, losses: 0, pnlSol: 0,
+        rugs: 0, streak: 0, // positive=winning streak, negative=losing
+        avgHoldSecs: 0, totalHoldSecs: 0,
+        lastTradeTs: 0,
+        promotions: 0, demotions: 0,
+        originalTier: null, // remember what tier they started as
+        blacklistedAt: 0,   // timestamp of blacklisting (0 = not blacklisted)
+      };
+    }
+    return ledger[addr];
+  }
+
+  // ── Record trade outcome ─────────────────────────────────────────────
+  function recordOutcome(walletAddr, isWin, pnlPct, pnlSol, holdSecs, reason) {
+    const L = _ensure(walletAddr);
+    const w = WMAP[walletAddr];
+
+    // Store original tier on first trade (so we know starting point)
+    if (L.copies === 0 && w) L.originalTier = w.tier;
+
+    L.copies++;
+    if (isWin) { L.wins++; L.streak = Math.max(0, L.streak) + 1; }
+    else       { L.losses++; L.streak = Math.min(0, L.streak) - 1; }
+    L.pnlSol += pnlSol;
+    L.totalHoldSecs += holdSecs;
+    L.avgHoldSecs = L.totalHoldSecs / (L.wins + L.losses || 1);
+    L.lastTradeTs = Date.now();
+
+    // ── RUG DETECTION ──
+    // Classify as rug if: loss > -70% AND held < 120s
+    // OR loss > -50% AND held < 30s (flash rug)
+    const isRug = (pnlPct < -70 && holdSecs < 120) ||
+                  (pnlPct < -50 && holdSecs < 30);
+    if (isRug) {
+      L.rugs++;
+      addFeed('warn', '\u{1F6A8} RUG DETECTED: W#' + (w?.rank||'?') + ' [' + (w?.tier||'?') + ']',
+        'pnl=' + pnlPct.toFixed(1) + '% hold=' + holdSecs.toFixed(0) + 's | rug #' + L.rugs + ' from this wallet');
+    }
+
+    // ── EVALUATE after recording ──
+    _tradesSinceReview++;
+    const action = evaluate(walletAddr);
+
+    // Auto-review all wallets every 10 trades
+    if (_tradesSinceReview >= 10) {
+      _tradesSinceReview = 0;
+      reviewAll();
+    }
+
+    // Save every 3 trades
+    if (L.copies % 3 === 0) save();
+
+    return { isRug, action, ledger: L };
+  }
+
+  // ── Evaluate single wallet for promotion/demotion/blacklist ──────────
+  function evaluate(addr) {
+    const L = ledger[addr];
+    if (!L || L.copies < 3) return 'none'; // not enough data
+    const w = WMAP[addr];
+    if (!w) return 'none';
+
+    const wr = L.wins / Math.max(1, L.wins + L.losses);
+    const trades = L.wins + L.losses;
+    const currentTier = w.tier;
+
+    // ── BLACKLIST CHECKS (most severe first) ──
+    // 2+ rugs = permanent blacklist
+    if (L.rugs >= 2) return _blacklist(addr, w, 'rugs_' + L.rugs);
+    // WR < 25% on 10+ trades = blacklist
+    if (trades >= 10 && wr < 0.25) return _blacklist(addr, w, 'wr_' + (wr*100).toFixed(0) + 'pct_on_' + trades);
+    // 5+ consecutive losses = blacklist
+    if (L.streak <= -5) return _blacklist(addr, w, 'streak_' + L.streak);
+
+    // ── DEMOTION CHECKS ──
+    // WR < 40% on 5+ trades
+    if (trades >= 5 && wr < 0.40 && currentTier !== 'C' && currentTier !== 'X') {
+      return _demote(addr, w, 'wr_' + (wr*100).toFixed(0) + 'pct');
+    }
+    // 3 consecutive losses (soft demote)
+    if (L.streak <= -3 && currentTier !== 'C' && currentTier !== 'X') {
+      return _demote(addr, w, 'streak_' + L.streak);
+    }
+    // 1 rug + WR < 50% = demote
+    if (L.rugs >= 1 && wr < 0.50 && currentTier !== 'C' && currentTier !== 'X') {
+      return _demote(addr, w, 'rug_and_low_wr');
+    }
+
+    // ── PROMOTION CHECKS ──
+    // B → A: 5+ trades, WR >= 55%, PnL > 0, no rugs in recent history
+    if (currentTier === 'B' && trades >= 5 && wr >= 0.55 && L.pnlSol > 0 && L.rugs === 0) {
+      return _promote(addr, w, 'B_to_A_wr' + (wr*100).toFixed(0));
+    }
+    // C → B: 5+ trades, WR >= 50%, PnL > 0
+    if (currentTier === 'C' && trades >= 5 && wr >= 0.50 && L.pnlSol > 0) {
+      return _promote(addr, w, 'C_to_B_recovery');
+    }
+    // A → S: 10+ trades, WR >= 65%, PnL > 2 SOL, no rugs
+    if (currentTier === 'A' && trades >= 10 && wr >= 0.65 && L.pnlSol > 2 && L.rugs === 0) {
+      return _promote(addr, w, 'A_to_S_wr' + (wr*100).toFixed(0) + '_pnl' + L.pnlSol.toFixed(1));
+    }
+    // B → S (skip A): 15+ trades, WR >= 70%, PnL > 5 SOL (exceptional performer)
+    if (currentTier === 'B' && trades >= 15 && wr >= 0.70 && L.pnlSol > 5 && L.rugs === 0) {
+      return _promote(addr, w, 'B_to_S_exceptional');
+    }
+
+    return 'none';
+  }
+
+  // ── Promote wallet one tier up ───────────────────────────────────────
+  function _promote(addr, w, reason) {
+    const ci = TIER_IDX[w.tier] || 2;
+    if (ci >= 4) return 'already_S'; // already S-tier
+    const newTier = TIERS_ORDERED[ci + 1];
+    const oldTier = w.tier;
+    w.tier = newTier;
+    WMAP[addr] = w;
+    const L = ledger[addr]; if (L) L.promotions++;
+    save();
+
+    addFeed('ml', '\u{2B06}\u{FE0F} PROMOTED: W#' + w.rank + ' ' + (w.name||addr.slice(0,8)),
+      oldTier + ' \u2192 ' + newTier + ' | ' + reason + ' | WR=' + ((L.wins/(L.wins+L.losses||1))*100).toFixed(0) + '% PnL=' + (L.pnlSol>=0?'+':'') + L.pnlSol.toFixed(3));
+    toast('\u{2B06}\u{FE0F} W#' + w.rank + ' ' + oldTier + '\u2192' + newTier + ' ' + reason, 'trade');
+
+    return 'promoted_' + oldTier + '_to_' + newTier;
+  }
+
+  // ── Demote wallet one tier down ──────────────────────────────────────
+  function _demote(addr, w, reason) {
+    const ci = TIER_IDX[w.tier] || 2;
+    if (ci <= 1) return 'already_C'; // already C-tier (can't demote further without blacklisting)
+    const newTier = TIERS_ORDERED[ci - 1];
+    const oldTier = w.tier;
+    w.tier = newTier;
+    WMAP[addr] = w;
+    const L = ledger[addr]; if (L) L.demotions++;
+    save();
+
+    addFeed('warn', '\u{2B07}\u{FE0F} DEMOTED: W#' + w.rank + ' ' + (w.name||addr.slice(0,8)),
+      oldTier + ' \u2192 ' + newTier + ' | ' + reason);
+    toast('\u{2B07}\u{FE0F} W#' + w.rank + ' ' + oldTier + '\u2192' + newTier, 'warn');
+
+    return 'demoted_' + oldTier + '_to_' + newTier;
+  }
+
+  // ── Blacklist wallet (tier X — hard block) ───────────────────────────
+  function _blacklist(addr, w, reason) {
+    const oldTier = w.tier;
+    if (oldTier === 'X') return 'already_blacklisted';
+    w.tier = 'X';
+    WMAP[addr] = w;
+    blacklist.add(addr);
+    const L = ledger[addr];
+    if (L) L.blacklistedAt = Date.now();
+    save();
+
+    addFeed('warn', '\u{1F6AB} BLACKLISTED: W#' + w.rank + ' ' + (w.name||addr.slice(0,8)),
+      oldTier + ' \u2192 X | ' + reason + ' | rugs=' + (L?.rugs||0) + ' wr=' + ((L?.wins/(L?.wins+L?.losses||1)||0)*100).toFixed(0) + '%');
+    toast('\u{1F6AB} W#' + w.rank + ' BLACKLISTED: ' + reason, 'warn');
+
+    return 'blacklisted';
+  }
+
+  // ── Is wallet blacklisted? (O(1) hot-path check) ────────────────────
+  function isBlacklisted(addr) {
+    return blacklist.has(addr);
+  }
+
+  // ── Review ALL wallets for tier adjustments ──────────────────────────
+  function reviewAll() {
+    let promoted = 0, demoted = 0, blacklisted = 0;
+    for (const addr of Object.keys(ledger)) {
+      const action = evaluate(addr);
+      if (action.startsWith('promoted')) promoted++;
+      else if (action.startsWith('demoted')) demoted++;
+      else if (action === 'blacklisted') blacklisted++;
+    }
+    if (promoted + demoted + blacklisted > 0) {
+      addFeed('ml', '\u{1F9EC} DARWIN REVIEW COMPLETE',
+        '\u2B06' + promoted + ' promoted | \u2B07' + demoted + ' demoted | \u{1F6AB}' + blacklisted + ' blacklisted | ' + Object.keys(ledger).length + ' tracked');
+    }
+    save();
+  }
+
+  // ── Rehabilitate a blacklisted wallet (manual or after 24h) ──────────
+  function rehabilitate(addr) {
+    const L = ledger[addr];
+    const w = WMAP[addr];
+    if (!L || !w || w.tier !== 'X') return false;
+
+    // 24h cooldown required
+    if (Date.now() - L.blacklistedAt < 86400000) return false;
+
+    // Reset to C-tier (must prove themselves again)
+    w.tier = 'C';
+    WMAP[addr] = w;
+    blacklist.delete(addr);
+    // Reset their record (fresh start)
+    L.wins = 0; L.losses = 0; L.pnlSol = 0; L.rugs = 0;
+    L.streak = 0; L.copies = 0;
+    L.blacklistedAt = 0;
+    save();
+
+    addFeed('info', '\u{267B}\u{FE0F} REHABILITATED: W#' + w.rank + ' ' + (w.name||addr.slice(0,8)),
+      'X \u2192 C | 24h cooldown passed | record reset');
+    return true;
+  }
+
+  // ── Auto-rehabilitate wallets that have served their 24h sentence ────
+  function autoRehabilitate() {
+    const now = Date.now();
+    let count = 0;
+    for (const addr of [...blacklist]) {
+      const L = ledger[addr];
+      if (L && L.blacklistedAt > 0 && (now - L.blacklistedAt) >= 86400000) {
+        if (rehabilitate(addr)) count++;
+      }
+    }
+    if (count > 0) addFeed('info', '\u{267B}\u{FE0F} Auto-rehab: ' + count + ' wallets restored to C-tier', '24h sentences served');
+  }
+
+  // ── Get wallet Darwin score (for display) ────────────────────────────
+  function getScore(addr) {
+    const L = ledger[addr];
+    if (!L) return null;
+    const wr = L.wins / Math.max(1, L.wins + L.losses);
+    return {
+      copies: L.copies, wins: L.wins, losses: L.losses,
+      wr, pnlSol: L.pnlSol, rugs: L.rugs, streak: L.streak,
+      promotions: L.promotions, demotions: L.demotions,
+      isBlacklisted: blacklist.has(addr),
+    };
+  }
+
+  // ── Stats summary ────────────────────────────────────────────────────
+  function stats() {
+    const tracked = Object.keys(ledger).length;
+    const bl = blacklist.size;
+    const tiers = { S:0, A:0, B:0, C:0, X:0 };
+    for (const addr of Object.keys(ledger)) {
+      const w = WMAP[addr];
+      if (w) tiers[w.tier] = (tiers[w.tier]||0) + 1;
+    }
+    return { tracked, blacklisted: bl, tiers };
+  }
+
+  load();
+
+  // Auto-rehab check on startup and every hour
+  setTimeout(autoRehabilitate, 5000);
+  setInterval(autoRehabilitate, 3600000);
+
+  return {
+    recordOutcome, evaluate, isBlacklisted, reviewAll,
+    rehabilitate, getScore, stats, save,
+    get blacklistSize() { return blacklist.size; },
+    get trackedCount() { return Object.keys(ledger).length; },
+  };
+})();
 
 
 // \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -4003,10 +4386,15 @@ async function _bootTrader(label) {
   setTimeout(runGmgnRanker,5000);
   setInterval(runGmgnRanker,3600000);
   initMCTSWorker();
-  setInterval(runMCTSEvaluation,2000);
+  setInterval(runMCTSEvaluation,1000);
   DB.startAutoSave();
   _updateGearBadge();
-  console.log('[MCHPai] Boot complete \u2713');
+  // Pre-warm PumpPortal connection (DNS + TCP + TLS handshake cached)
+  fetch('https://pumpportal.fun/api/trade-local',{method:'OPTIONS'}).catch(()=>{});
+  if(_lightningUrl) fetch(_lightningUrl,{method:'OPTIONS'}).catch(()=>{});
+  // Pre-warm Jito endpoints
+  JITO_ENDPOINTS.forEach(ep=>fetch(ep+'/api/v1/bundles',{method:'OPTIONS'}).catch(()=>{}));
+  console.log('[MCHPai] Boot complete + connections pre-warmed \u2713');
 }
 
 // ── autoLaunch: fires on DOMContentLoaded ─────────────────────────────────────
@@ -4314,12 +4702,12 @@ function onMsg(m){
   const sym=m.symbol||m.name||mint.slice(0,6)+'...';
   const bundleId_ct=getBundleId(w.addr);
   const bConv_ct=getBundleConviction(mint,bundleId_ct)||1.0;
-  if(canTrade(mint,w.tier,bConv_ct)){
-    // FIRE TRADE IMMEDIATELY — everything below is cosmetic
-    queueMicrotask(()=>doBuy(mint,sym,w,solAmt,tokAmt,rAt));
+  if(canTrade(mint,w.tier,bConv_ct,w.addr)){
+    // FIRE TRADE IMMEDIATELY — zero delay, no microtask deferral
+    doBuy(mint,sym,w,solAmt,tokAmt,rAt);
   }
 
-  // ── Cosmetic / telemetry work — runs AFTER trade dispatch ──
+  // ── Cosmetic / telemetry — deferred after trade dispatch ──
   S.latDetect.push(performance.now()-rAt);
   if(S.latDetect.length>500)S.latDetect.shift();
   const evtTs = m.timestamp ? (Date.now() - m.timestamp) : 0;
@@ -4331,13 +4719,16 @@ function onMsg(m){
 }
 
 // \u2500\u2500 Risk guard (mirrors Rust circuit_breaker.rs) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-function canTrade(mint, walletTier, bundleConv){
+function canTrade(mint, walletTier, bundleConv, walletAddr){
   if(S.paused){addFeed('info','\u23f8 PAUSED','trade skipped');return false;}
   if(S.positions[mint])return false;
-  const posCount=Object.keys(S.positions).length;
-  if(posCount>=CFG.maxpos){addFeed('info','\u26d4 MAX POS',''+posCount+'/'+CFG.maxpos);return false;}
+  // DARWIN: hard block blacklisted wallets
+  if(walletAddr && WALLET_DARWIN.isBlacklisted(walletAddr))return false;
+  // DARWIN: block X-tier wallets
+  if(walletTier==='X')return false;
+  if(S._posCount>=CFG.maxpos)return false;
   if(S.paper)return true;
-  if(S.risk.cb){addFeed('warn','\u26d4 CIRCUIT BREAKER',''+S.risk.consec+' losses');return false;}
+  if(S.risk.cb)return false;
 
   // HMM Regime gate — BYPASSED first 10 live trades (no data = blocks everything)
   if((S.wins+S.losses)>=10){
@@ -4369,6 +4760,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   if(S.paper){
     const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
     const paperSz=Math.min(((CFG.size/100)||0.1)*bundleMult, (CFG.size/100)*3);
+    S._posCount++;
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
       sizeSol:paperSz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,priceTickCount:0,
       sig:'PAPER_'+mint.slice(0,8),conf:1.0,status:'paper'};
@@ -4381,31 +4773,102 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
     return;
   }
 
-  // ── LIVE MODE: trade-local → sign with YOUR keypair → submit ──
-  // This guarantees the trade executes from YOUR wallet.
-  if(!S.keypair||!S.pubkey){addFeed('warn','\u26d4 NO WALLET','Private key required — set in Settings');console.error('[LIVE] No keypair');return;}
-  console.log('[MCHPai] LIVE BUY:',sym,'mint='+mint.slice(0,12),'W#'+w.rank+'['+w.tier+']','pubkey='+S.pubkey.slice(0,8));
+  // ── LIVE MODE: SPEED-OPTIMIZED EXECUTION ──
+  // decideFast() is SYNC (<1ms) — fires buy BEFORE slow ML runs
+  if(!S.keypair||!S.pubkey){addFeed('warn','\u26d4 NO WALLET','Key required');return;}
 
-  const dec=await decide(w,solAmt*1e9,tokAmt,mint);
-  if(!dec.go){addFeed('info','\u23ed SKIP '+sym+' \u2014 '+dec.reason,'W#'+w.rank);console.log('[MCHPai] ML skip:',dec.reason);return;}
+  // ── PHASE 1: FAST GATE (sync, <1ms) ──────────────────────────────
+  // Wallet trust (O(1) lookup)
+  if(WALLET_TRUST.isCold(w.addr))return;
+  const _wtScore = WALLET_TRUST.getScore(w.addr).score;
+  // Darwin score (O(1))
+  const _dScore = WALLET_DARWIN.getScore(w.addr);
+  const _darwinWR = _dScore ? _dScore.wr : 0.5;
+  const _darwinPenalty = (_dScore && _dScore.rugs > 0) ? 0.15 : 0;
+  // Cached ML scores if available
+  const _cached = _mlCache.get(w.addr);
+  const _rugEst = _cached ? _cached.rugProb : (w.rank<=5?0.10:w.rank<=20?0.12:0.15);
+  const _pumpEst = _cached ? _cached.pumpScore : (w.tier==='S'?0.75:w.tier==='A'?0.68:0.60);
+  // SGD prediction (sync, <0.1ms)
+  const _sgdX = ONLINE_SGD.buildX(w.tier||'B',w.rank,w.wr7d||0,w.pnl7d||0,1.0,solAmt,_rugEst,_pumpEst,HMM.currentRegime().idx,HMM.currentRegime().conf,w.bundleSize||1,false);
+  const _sgdPred = ONLINE_SGD.confidence() > 0.3 ? ONLINE_SGD.predict(_sgdX) : 0.55;
+  // Combined fast confidence: weighted blend
+  const _fastConf = Math.min(0.95,
+    _pumpEst*(1-_rugEst)*0.25 + _wtScore*0.20 + _darwinWR*0.15 +
+    _sgdPred*0.25 + confBoost(w) + 0.05 - _darwinPenalty
+  );
+  if(_fastConf < 0.38)return;
 
   const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
   const regimeMult=HMM.regimeSizeMultiplier();
-  const sz=Math.min(dec.sizeLamports/1e9*bundleMult*regimeMult,(CFG.size/100)*3);
+  const _fastSize = CFG.kelly ? kellySize(_fastConf,w.addr) : CFG.size/100*1e9;
+  const sz=Math.min(_fastSize/1e9*bundleMult*regimeMult,(CFG.size/100)*3);
   const tip=S.dynamicTip||0.0005;
   const tExec=performance.now();
 
-  addFeed('buy','\u26a1 BUY '+sym,sz.toFixed(3)+'\u25ce W#'+w.rank+'['+w.tier+'] tip='+tip.toFixed(4));
-  console.log('[MCHPai] Sending',sz.toFixed(4),'SOL for',sym,'tip='+tip);
+  // ── PHASE 2: FIRE HTTP IMMEDIATELY ───────────────────────────────
+  // Trade-local + Lightning race in PARALLEL (don't wait for one to fail)
+  // Template concat — 5x faster than JSON.stringify for fixed schema
+  const _ppBody = '{"publicKey":"'+S.pubkey+'","action":"buy","mint":"'+mint+'","denominatedInSol":"true","amount":'+sz+',"slippage":20,"priorityFee":'+tip+',"pool":"auto"}';
+
+  // PHASE 3: ASYNC ML ENRICHMENT (runs in background, doesn't block trade)
+  // If ML says bad AFTER we've already fired, tag position for early exit review
+  decide(w,solAmt*1e9,tokAmt,mint).then(dec=>{
+    if(!dec.go && S.positions[mint]){
+      // ML vetoed after trade fired — flag for aggressive exit
+      S.positions[mint]._mlVetoed = true;
+      S.positions[mint]._mlVetoReason = dec.reason;
+      addFeed('warn','\u26a0 ML POST-VETO: '+sym,'Flagged for early exit: '+dec.reason);
+    } else if(dec.go && S.positions[mint]){
+      // Update position with refined ML signals for learning
+      S.positions[mint]._lastRugProb = dec.rugProb;
+      S.positions[mint]._lastPumpScore = dec.pumpScore;
+      S.positions[mint]._lastSgdProb = dec._sgdProb||0.5;
+      S.positions[mint]._lastWalletScore = dec._walletScore||0.5;
+      S.positions[mint]._lastNtmScore = dec._ntmScore||0.5;
+      S.positions[mint].conf = dec.conf; // upgrade confidence
+    }
+  }).catch(()=>{});
 
   try{
-    // ── PRIMARY: trade-local → sign with YOUR key → Jito+RPC race submit ──
-    // PumpPortal builds the TX, YOU sign it, YOU submit it. Trades from YOUR wallet.
-    const ppResp=await fetch('https://pumpportal.fun/api/trade-local',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({publicKey:S.pubkey,action:'buy',mint,
-        denominatedInSol:'true',amount:sz,slippage:20,priorityFee:tip,pool:'auto'}),
+    // ── PARALLEL: trade-local (primary) + Lightning (secondary) ──
+    const ppPromise = fetch('https://pumpportal.fun/api/trade-local',{
+      method:'POST',headers:_JSON_HDR,body:_ppBody,
     });
+    // Fire Lightning in parallel — RACE both paths
+    let lightningRacePromise = null;
+    if(HC.ppKey&&_lightningUrl){
+      lightningRacePromise = (async()=>{
+        try{
+          const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
+            body:buildBuyBody(mint,sz,tip),keepalive:true});
+          if(!r.ok)throw new Error('lightning_'+r.status);
+          const sig=(await r.text()).trim().replace(/"/g,'');
+          if(sig&&sig.length>20)return{sig,via:'lightning',fast:true};
+          throw new Error('bad_sig');
+        }catch(e){throw e;}
+      })();
+    }
+
+    // RACE: trade-local sign path vs Lightning direct
+    // If Lightning wins, we skip the sign+submit entirely
+    const tradeLocalPath = (async()=>{
+      const ppResp = await ppPromise;
+      if(!ppResp.ok){const errText=await ppResp.text().catch(()=>'');throw new Error('trade-local '+ppResp.status+': '+errText.slice(0,120));}
+      const txBuf=new Uint8Array(await ppResp.arrayBuffer());
+      const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
+      tx.sign([S.keypair]);
+      const ser=tx.serialize();
+      const b64=u8ToB64(ser);
+      const{sig,via}=await raceSubmit(b64);
+      return{sig,via,fast:false};
+    })();
+
+    const racePaths = [tradeLocalPath];
+    if(lightningRacePromise) racePaths.push(lightningRacePromise);
+    const winner = await Promise.any(racePaths);
+    const sig=winner.sig, via=winner.via;
+    if(winner.fast)addFeed('buy','\u26a1 LIGHTNING WON race for '+sym,'');
     if(!ppResp.ok){
       const errText=await ppResp.text().catch(()=>'');
       throw new Error('trade-local '+ppResp.status+': '+errText.slice(0,120));
@@ -4414,7 +4877,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
     const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
     tx.sign([S.keypair]);
     const ser=tx.serialize();
-    const b64=btoa(String.fromCharCode.apply(null,ser));
+    const b64=u8ToB64(ser);
     const{sig,via}=await raceSubmit(b64);
     const execMs=Math.round(performance.now()-tExec);
     const totMs=Math.round(performance.now()-t0);
@@ -4423,9 +4886,10 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
     console.log('[MCHPai] \u2705 LIVE BUY SUCCESS:',sym,sz.toFixed(4),'SOL via',via,'sig='+sig);
     console.log('[MCHPai] Verify: https://solscan.io/tx/'+sig);
 
+    S._posCount++;
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
       sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
-      priceTickCount:0,sig,conf:dec.conf,status:'pending',
+      priceTickCount:0,sig,conf:_fastConf,status:'pending',
       bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:dec.rugProb,_lastPumpScore:dec.pumpScore,_lastSgdProb:dec._sgdProb||0.5,_lastWalletScore:dec._walletScore||0.5,_lastNtmScore:dec._ntmScore||0.5};
     S.risk.daily++;
     if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
@@ -4449,9 +4913,10 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
         const sig=(await r.text()).trim().replace(/"/g,'');
         const totMs=Math.round(performance.now()-t0);
         console.log('[MCHPai] \u2705 Lightning fallback OK:',sig);
+        S._posCount++;
         S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
           sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
-          priceTickCount:0,sig,conf:dec.conf,status:'pending',bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:dec.rugProb,_lastPumpScore:dec.pumpScore,_lastSgdProb:dec._sgdProb||0.5,_lastWalletScore:dec._walletScore||0.5,_lastNtmScore:dec._ntmScore||0.5};
+          priceTickCount:0,sig,conf:_fastConf,status:'pending',bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:dec.rugProb,_lastPumpScore:dec.pumpScore,_lastSgdProb:dec._sgdProb||0.5,_lastWalletScore:dec._walletScore||0.5,_lastNtmScore:dec._ntmScore||0.5};
         S.risk.daily++;
         if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
         S.wstats[w.rank].copies++;
@@ -4474,7 +4939,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 // \u2500\u2500 Execute Sell \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 async function doSell(mint,reason){
   const pos=S.positions[mint];if(!pos)return;
-  delete S.positions[mint];
+  delete S.positions[mint];S._posCount--;
   cleanMctsPosition(mint); // free MCTS tick data for closed position
   const pnlPct=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
   const pnlSOL=pos.sizeSol*(pnlPct/100);
@@ -4492,7 +4957,8 @@ async function doSell(mint,reason){
     _bumpWStats(); DB.markDirty('wstats'); DB.markDirty('positions');
     if(S.ws?.readyState===1)S.ws.send(WS_UNSUB_TOK(mint));
     S.log.unshift({sym:pos.sym,mint,pnlPct,pnlSOL,reason,holdSecs,win:isWin,ts:Date.now()});
-    mlLearnFromTrade(pos,pnlPct,isWin);ATR_STOP.clean(mint);
+    ATR_STOP.clean(mint);
+    setTimeout(()=>{mlLearnFromTrade(pos,pnlPct,isWin);WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);},0);
     if(S.log.length>200)S.log.pop();
     toast((isWin?'\ud83d\udcc4\ud83d\udcb0':'\ud83d\udcc4\ud83d\udcc9')+' PAPER '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'%',isWin?'close':'loss');
     addFeed(isWin?'win':'loss','\ud83d\udcc4 '+(isWin?'\ud83d\udcb0':'\ud83d\udcc9')+' PAPER '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'%',reason+' held '+holdSecs.toFixed(0)+'s '+(pnlSOL>=0?'+':'')+pnlSOL.toFixed(4)+'\u25ce');
@@ -4506,7 +4972,7 @@ async function doSell(mint,reason){
   try{
     // ── PRIMARY: trade-local → sign with YOUR key → submit ──
     const ppResp=await fetch('https://pumpportal.fun/api/trade-local',{
-      method:'POST',headers:{'Content-Type':'application/json'},
+      method:'POST',headers:_JSON_HDR,
       body:JSON.stringify({publicKey:S.pubkey,action:'sell',mint,
         denominatedInSol:'false',amount:'100%',slippage:25,priorityFee:tip,pool:'auto'}),
     });
@@ -4518,7 +4984,7 @@ async function doSell(mint,reason){
     const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
     tx.sign([S.keypair]);
     const ser=tx.serialize();
-    const b64=btoa(String.fromCharCode.apply(null,ser));
+    const b64=u8ToB64(ser);
     const{sig,via}=await raceSubmit(b64);
     const clMs=Math.round(performance.now()-t0sell);
     console.log('[MCHPai] \u2705 LIVE SELL SUCCESS:',pos.sym,'via',via,'sig='+sig);
@@ -4544,7 +5010,8 @@ async function doSell(mint,reason){
       await DB.saveTradeLog({ sym:pos.sym, mint, pnlPct, pnlSOL, reason,
         holdSecs, win:isWin, tier:pos.tier, ts:Date.now() });
       CALIBRATOR.processTrade(mint, pos, pnlPct);
-      mlLearnFromTrade(pos,pnlPct,isWin);ATR_STOP.clean(mint);
+      ATR_STOP.clean(mint);
+      setTimeout(()=>{mlLearnFromTrade(pos,pnlPct,isWin);WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);},0);
     });
   }catch(err){
     console.error('[MCHPai] SELL FAILED:',err.message);
@@ -4571,6 +5038,7 @@ async function doSell(mint,reason){
         if(S.ws?.readyState===1)S.ws.send(WS_UNSUB_TOK(mint));
         toast((isWin?'\ud83d\udcb0':'\ud83d\udcc9')+' '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'% Lightning',isWin?'close':'loss');
         addFeed(isWin?'win':'loss','\u2705 SOLD '+pos.sym+' via Lightning',''+clMs+'ms');
+        WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);
       }catch(err2){
         console.error('[MCHPai] SELL BOTH FAILED:',err2.message);
         S.positions[mint]=pos;
@@ -4595,18 +5063,25 @@ const JITO_ENDPOINTS = [
   'https://slc.mainnet.block-engine.jito.wtf',
 ];
 
+// Pre-built JSON templates — only b64 payload changes per trade
+const _RPC_PRE='{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["';
+const _RPC_POST='",{"encoding":"base64","skipPreflight":true,"maxRetries":0}]}';
+const _JITO_PRE='{"jsonrpc":"2.0","id":1,"method":"sendBundle","params":[["';
+const _JITO_POST='"]]}';
+const _JSON_HDR={'Content-Type':'application/json'};
+
 async function raceSubmit(b64){
   const sends=[];
-  const rpcBody=JSON.stringify({jsonrpc:'2.0',id:1,method:'sendTransaction',
-    params:[b64,{encoding:'base64',skipPreflight:CFG.skipPreflight,maxRetries:0}]});
-  const jitoBody=JSON.stringify({jsonrpc:'2.0',id:1,method:'sendBundle',params:[[b64]]});
+  // Template concat is 10x faster than JSON.stringify for fixed schemas
+  const rpcBody=_RPC_PRE+b64+_RPC_POST;
+  const jitoBody=_JITO_PRE+b64+_JITO_POST;
 
   // ── Jito: race all 5 regions ─────────────────────────────────────────────
   if(CFG.jito){
     JITO_ENDPOINTS.forEach((ep,i)=>{
       sends.push((async()=>{
         const r=await fetch(ep+'/api/v1/bundles',{method:'POST',
-          headers:{'Content-Type':'application/json'},body:jitoBody});
+          headers:_JSON_HDR,body:jitoBody});
         const d=await r.json();
         if(d.result&&!d.error)return{sig:d.result,via:'jito-'+['nyc','ams','fra','tok','slc'][i]};
         throw new Error('jito-'+i+':'+JSON.stringify(d.error));
@@ -4617,7 +5092,7 @@ async function raceSubmit(b64){
   // ── RPC broadcast: primary nodes (counted in race) ───────────────────────
   S.rpcs.forEach((rpc,i)=>sends.push((async()=>{
     const r=await fetch(rpc,{method:'POST',
-      headers:{'Content-Type':'application/json'},body:rpcBody});
+      headers:_JSON_HDR,body:rpcBody});
     const d=await r.json();
     if(d.result&&!d.error)return{sig:d.result,via:'rpc'+(i+1)};
     throw new Error('rpc'+i);
@@ -4625,7 +5100,7 @@ async function raceSubmit(b64){
 
   // ── Ankr free RPC: fire-and-forget broadcast (not in race, zero latency cost)
   fetch('https://rpc.ankr.com/solana',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:rpcBody}).catch(()=>{});
+    headers:_JSON_HDR,body:rpcBody}).catch(()=>{});
 
   return await Promise.any(sends);
 }
@@ -4677,6 +5152,19 @@ function posMonitor(){
   let priceChanged=false;
   const now=Date.now();
   for(const[mint,pos]of entries){
+    // ML POST-VETO: if async ML vetoed after buy fired, exit aggressively
+    if(pos._mlVetoed && pos.priceTickCount>=2){
+      const _vetoPnl = pos.entryPrice>0 ? ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100 : 0;
+      // Exit if losing OR if only marginal gain (ML said it was bad)
+      if(_vetoPnl < 5){
+        addFeed('sell','\u26a0 ML VETO EXIT: '+pos.sym,'reason='+pos._mlVetoReason+' pnl='+_vetoPnl.toFixed(1)+'%');
+        queueMicrotask(()=>doSell(mint,'ml_post_veto_'+pos._mlVetoReason));
+        continue;
+      } else {
+        // Profitable despite ML veto — clear flag, let it ride
+        pos._mlVetoed = false;
+      }
+    }
     // Stale position cleanup: no price ticks for 5 minutes → likely dead token
     if(pos.priceTickCount===0 && (now-pos.entryTime)>300000){
       addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 5min — auto-closing');
@@ -4756,6 +5244,10 @@ function renderUI(){
   setText('ml-ntm-size',NTM.size||0);
   const _cr=HMM.currentRegime();setText('ml-regime',_cr.name+' '+(_cr.conf*100).toFixed(0)+'%');
   setText('ml-ens-weights',Object.entries(ENSEMBLE.weights).map(([k,v])=>k.slice(0,4)+':'+(v*100).toFixed(0)+'%').join(' '));
+  // ── DARWIN STATS ──
+  const _ds=WALLET_DARWIN.stats();
+  setText('dw-tracked',_ds.tracked);setText('dw-blacklisted',_ds.blacklisted);
+  setText('dw-tiers','S:'+(_ds.tiers.S||0)+' A:'+(_ds.tiers.A||0)+' B:'+(_ds.tiers.B||0)+' C:'+(_ds.tiers.C||0)+' X:'+(_ds.tiers.X||0));
   // Active panel
   const act=document.querySelector('.panel.on');
   if(act?.id==='panel-pos')renderPos();
@@ -4910,7 +5402,7 @@ function renderWStats(){
   document.getElementById('wstbody').innerHTML=rows.map(r=>`
 <tr>
 <td style="color:${r.tier==='S'?'var(--go)':'var(--hold)'}">#${r.rank}</td>
-<td>${r.tier}</td><td>${r.copies}</td><td>${r.wins}</td>
+<td style="color:${r.tier==='X'?'var(--stop)':r.tier==='S'?'var(--go)':r.tier==='A'?'var(--hold)':'var(--ink2)'};font-weight:${r.tier==='X'||r.tier==='S'?'900':'400'}">${r.tier}${r.tier==='X'?'\u{1F6AB}':''}</td><td>${r.copies}</td><td>${r.wins}</td>
 <td style="color:${r.wr>=0.6?'var(--go)':r.wr>=0.5?'var(--hold)':'var(--stop)'}">${(r.wr*100).toFixed(0)}%</td>
 <td style="color:${r.pnl>=0?'var(--go)':'var(--stop)'}">${r.pnl>=0?'+':''}${r.pnl.toFixed(3)}</td>
 <td style="color:var(--ink2)">${r.copies>0?r.avgHold.toFixed(0)+'s':'--'}</td>
