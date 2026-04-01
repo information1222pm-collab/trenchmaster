@@ -13,6 +13,61 @@
 // bs58 inlined \u2014 zero CDN dependency, works offline
 // Base58 alphabet used by Bitcoin/Solana
 // Fast Uint8Array → base64 (no .apply() limit, no temp string)
+// ═══ SIGNER WORKER — signs transactions off main thread ═══
+let _signWorker=null;
+function _initSignWorker(){
+  try{
+    const wCode=`
+      importScripts('https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.4/lib/index.iife.min.js');
+      let _kp=null;
+      self.onmessage=function(e){
+        try{
+          if(e.data.type==='loadKey'){
+            _kp=solanaWeb3.Keypair.fromSecretKey(new Uint8Array(e.data.key));
+            self.postMessage({type:'keyLoaded',pubkey:_kp.publicKey.toString()});return;
+          }
+          if(e.data.type==='sign'&&_kp){
+            const tx=solanaWeb3.VersionedTransaction.deserialize(new Uint8Array(e.data.tx));
+            tx.sign([_kp]);const ser=tx.serialize();
+            // chunked base64
+            let bin='';const u8=ser;for(let i=0;i<u8.length;i+=8192){let s='';const end=Math.min(i+8192,u8.length);for(let j=i;j<end;j++)s+=String.fromCharCode(u8[j]);bin+=s;}
+            self.postMessage({type:'signed',b64:btoa(bin),id:e.data.id});return;
+          }
+        }catch(err){self.postMessage({type:'error',msg:err.message,id:e.data.id});}
+      };
+    `;
+    const blob=new Blob([wCode],{type:'application/javascript'});
+    _signWorker=new Worker(URL.createObjectURL(blob));
+    _signWorker.onerror=()=>{_signWorker=null;};
+  }catch(e){_signWorker=null;}
+}
+
+// Sign TX using worker (returns promise). Falls back to main thread.
+let _signId=0;
+const _signCallbacks={};
+function signTxAsync(txBytes){
+  if(!_signWorker)return null; // caller falls back to sync sign
+  return new Promise((resolve,reject)=>{
+    const id=++_signId;
+    _signCallbacks[id]={resolve,reject,timer:setTimeout(()=>{delete _signCallbacks[id];reject(new Error('sign timeout'));},5000)};
+    _signWorker.postMessage({type:'sign',tx:Array.from(txBytes),id});
+  });
+}
+if(_signWorker){
+  _signWorker.onmessage=function(e){
+    if(e.data.type==='signed'&&_signCallbacks[e.data.id]){
+      clearTimeout(_signCallbacks[e.data.id].timer);
+      _signCallbacks[e.data.id].resolve(e.data.b64);
+      delete _signCallbacks[e.data.id];
+    }
+    if(e.data.type==='error'&&_signCallbacks[e.data.id]){
+      clearTimeout(_signCallbacks[e.data.id].timer);
+      _signCallbacks[e.data.id].reject(new Error(e.data.msg));
+      delete _signCallbacks[e.data.id];
+    }
+  };
+}
+
 function u8ToB64(u8){const L=u8.length;let bin='';const chunk=8192;for(let i=0;i<L;i+=chunk){const end=Math.min(i+chunk,L);let s='';for(let j=i;j<end;j++)s+=String.fromCharCode(u8[j]);bin+=s;}return btoa(bin);}
 
 const bs58=(()=>{
@@ -5102,6 +5157,11 @@ async function _bootTrader(label) {
   if(_lightningUrl) fetch(_lightningUrl,{method:'OPTIONS'}).catch(()=>{});
   // Pre-warm Jito endpoints
   JITO_ENDPOINTS.forEach(ep=>fetch(ep+'/api/v1/bundles',{method:'OPTIONS'}).catch(()=>{}));
+  // Init Signer Worker (off-main-thread signing)
+  _initSignWorker();
+  if(_signWorker&&S.keypair){
+    _signWorker.postMessage({type:'loadKey',key:Array.from(S.keypair.secretKey)});
+  }
   // Phase 1 systems init
   setInterval(()=>{WALLET_INTENT.cleanup();LAUNCH_SNIPER.cleanup();WHALE_DETECTOR.cleanup();CORRELATOR.cleanup();}, 300000); // cleanup stale sessions every 5min
   // Engine bridge: probe for local execution engine
@@ -5395,71 +5455,60 @@ function isNew(key){
 
 // \u2500\u2500 Message handler \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function onMsg(m){
-  const trader = m.user || m.traderPublicKey;
+  // ═══ CRITICAL PATH — zero unnecessary work before buy fires ═══
+  const trader=m.user||m.traderPublicKey;
   const w=WMAP[trader];if(!w)return;
-  const sig = m.signature || m.txSignature;
-  if(!isNew(sig))return;
+  if(!isNew(m.signature||m.txSignature))return;
   S.signals++;
-  // INTENT ENGINE: record ALL wallet activity (buys + sells)
-  const _isBuyQ=m.is_buy===true||m.is_buy===1||m.txType==='buy';
-  const _sigSol=m.sol_amount??m.solAmount??0;
-  WALLET_INTENT.recordActivity(trader,m.mint,_sigSol,_isBuyQ);
-  // LAUNCH SNIPER: track token birth + freshness
-  const _launch=LAUNCH_SNIPER.recordTrade(m.mint,trader,_sigSol);
-  // WHALE DETECTOR: flag large buys
-  if(_isBuyQ&&_sigSol>0){const _wh=WHALE_DETECTOR.check(m.mint,_sigSol,trader);
-    if(_wh){CORRELATOR.record(m.mint,_wh.isMega?'mega_whale':'whale_buy');addFeed('buy','\u{1F40B} '+((_wh.isMega?'MEGA ':'')+'WHALE: ')+_sigSol.toFixed(1)+'\u25ce on '+(m.symbol||m.mint?.slice(0,6)),'pressure='+_wh.pressure.toFixed(2)+' count='+_wh.whaleCount);}
-  }
-  // CORRELATOR: record base wallet buy signal
-  if(_isBuyQ){
-    CORRELATOR.record(m.mint,'wallet_buy');
-    if(_launch.isLaunch||_launch.freshness>0.7)CORRELATOR.record(m.mint,'fresh_launch');
-    if(WALLET_INTENT.isHotSession(trader))CORRELATOR.record(m.mint,'hot_session');
-    if(WALLET_INTENT.intentScore(trader)>0.6)CORRELATOR.record(m.mint,'intent_high');
-  }
   const rAt=m._rxAt||performance.now();
-
   const mint=m.mint;
-  const isBuy = m.is_buy === true || m.is_buy === 1 || m.txType==='buy';
-  const isSell= m.is_buy === false || m.is_buy === 0 || m.txType==='sell';
+  const isBuy=m.is_buy===true||m.is_buy===1||m.txType==='buy';
 
-  // Mirror exit: alpha sells token we hold — dispatch IMMEDIATELY
-  if(isSell&&S.positions[mint]&&CFG.mirrorExit&&(S.positions[mint].priceTickCount||0)>=1){
-    if(S.positions[mint]) S.positions[mint]._alphaSold = true;
+  // Mirror exit — zero delay
+  if(!isBuy&&S.positions[mint]&&CFG.mirrorExit&&(S.positions[mint].priceTickCount||0)>=1){
+    S.positions[mint]._alphaSold=true;
     queueMicrotask(()=>doSell(mint,'mirror_exit_W'+w.rank));
-    // Cosmetics deferred
-    addFeed('sell','\ud83e\ude9e MIRROR EXIT: W#'+w.rank+'['+w.tier+'] '+(m.symbol||m.name||mint.slice(0,6)),'Exit now');
-    flashW(w.rank);
+    setTimeout(()=>{addFeed('sell','\ud83e\ude9e MIRROR EXIT: W#'+w.rank+'['+w.tier+'] '+(m.symbol||m.name||mint.slice(0,6)),'Exit now');flashW(w.rank);},0);
     return;
   }
   if(!isBuy)return;
 
-  // ── FAST PATH: check canTrade + dispatch doBuy before ANY cosmetic work ──
-  const solAmt = m.sol_amount ?? m.solAmount ?? 0;
-  const tokAmt = m.token_amount ?? m.tokenAmount ?? 0;
+  // FAST PATH: canTrade + doBuy — NOTHING ELSE before this
+  const solAmt=m.sol_amount??m.solAmount??0;
+  const tokAmt=m.token_amount??m.tokenAmount??0;
   const sym=m.symbol||m.name||mint.slice(0,6)+'...';
-  const bundleId_ct=getBundleId(w.addr);
-  const bConv_ct=getBundleConviction(mint,bundleId_ct)||1.0;
-  if(bConv_ct>=1.5)CORRELATOR.record(mint,'bundle_prop');
-  if(canTrade(mint,w.tier,bConv_ct,w.addr)){
-    // FIRE TRADE IMMEDIATELY — zero delay, no microtask deferral
+  if(canTrade(mint,w.tier,getBundleConviction(mint,getBundleId(w.addr))||1.0,w.addr)){
     doBuy(mint,sym,w,solAmt,tokAmt,rAt);
   }
 
-  // ── Cosmetic / telemetry — deferred after trade dispatch ──
-  S.latDetect.push(performance.now()-rAt);
-  if(S.latDetect.length>500)S.latDetect.shift();
-  const evtTs = m.timestamp ? (Date.now() - m.timestamp) : 0;
-  if(evtTs>0){S.sigDeltas.push(evtTs);if(S.sigDeltas.length>100)S.sigDeltas.shift();}
-  const staleStr=evtTs>0?' stale='+evtTs+'ms':'';
-  addFeed('buy','\ud83d\udce1'+(S.paper?'\ud83d\udcc4':' ')+'W#'+w.rank+'['+w.tier+'] '+sym,
-    solAmt.toFixed(3)+'\u25ce'+(S.paper?'\u2192PAPER':'\u2192LIVE')+staleStr);
-  flashW(w.rank);
+  // ═══ DEFERRED WORK — runs AFTER buy fires, on next microtask ═══
+  setTimeout(()=>{
+    // Intent + Sniper + Whale + Correlator (intelligence, not gating)
+    WALLET_INTENT.recordActivity(trader,mint,solAmt,true);
+    LAUNCH_SNIPER.recordTrade(mint,trader,solAmt);
+    if(solAmt>0){const _wh=WHALE_DETECTOR.check(mint,solAmt,trader);
+      if(_wh){CORRELATOR.record(mint,_wh.isMega?'mega_whale':'whale_buy');
+        addFeed('buy','\u{1F40B} '+(_wh.isMega?'MEGA ':'')+'WHALE '+solAmt.toFixed(1)+'\u25ce '+(m.symbol||mint.slice(0,6)),'p='+_wh.pressure.toFixed(2));}
+    }
+    CORRELATOR.record(mint,'wallet_buy');
+    const _fr=LAUNCH_SNIPER.freshness(mint);
+    if(_fr>0.7)CORRELATOR.record(mint,'fresh_launch');
+    if(WALLET_INTENT.isHotSession(trader))CORRELATOR.record(mint,'hot_session');
+    const _bConv=getBundleConviction(mint,getBundleId(w.addr))||1.0;
+    if(_bConv>=1.5)CORRELATOR.record(mint,'bundle_prop');
+    // Telemetry + cosmetics
+    S.latDetect.push(performance.now()-rAt);if(S.latDetect.length>500)S.latDetect.shift();
+    const evtTs=m.timestamp?(Date.now()-m.timestamp):0;
+    if(evtTs>0){S.sigDeltas.push(evtTs);if(S.sigDeltas.length>100)S.sigDeltas.shift();}
+    addFeed('buy','\ud83d\udce1'+(S.paper?'\ud83d\udcc4':' ')+'W#'+w.rank+'['+w.tier+'] '+sym,
+      solAmt.toFixed(3)+'\u25ce'+(S.paper?'\u2192PAPER':'\u2192LIVE'));
+    flashW(w.rank);
+  },0);
 }
 
 // \u2500\u2500 Risk guard (mirrors Rust circuit_breaker.rs) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function canTrade(mint, walletTier, bundleConv, walletAddr){
-  if(S.paused){addFeed('info','\u23f8 PAUSED','trade skipped');return false;}
+  if(S.paused)return false;
   if(S.positions[mint])return false;
   // DARWIN: hard block blacklisted wallets
   if(walletAddr && WALLET_DARWIN.isBlacklisted(walletAddr))return false;
@@ -5475,19 +5524,15 @@ function canTrade(mint, walletTier, bundleConv, walletAddr){
   // HMM Regime gate — BYPASSED first 10 live trades (no data = blocks everything)
   if((S.wins+S.losses)>=10){
     const regimeCheck = HMM.isAllowedByRegime(walletTier||'B', bundleConv||1.0);
-    if(!regimeCheck.allowed){
-      addFeed('info',`\ud83d\udeab ${HMM.currentRegime().name}: skip ${walletTier}`,regimeCheck.reason);
-      return false;
-    }
+    if(!regimeCheck.allowed)return false;
   }
 
   const need=CFG.size/100,avail=S.balanceSol-CFG.res/100;
   // Balance unknown: WARN but don't block — Lightning API validates server-side
   if(S.balanceSol===0){
-    addFeed('warn','\u26a0 BAL UNKNOWN','RPC failed — trying Lightning anyway');
+    // balance unknown — proceed (Lightning validates server-side)
   } else if(avail<need){
-    addFeed('warn','\u26d4 Reserve guard','bal='+S.balanceSol.toFixed(3)+' need='+need.toFixed(3));
-    return false;
+    return false; // reserve guard
   }
   return true;
 }
@@ -5495,6 +5540,7 @@ function canTrade(mint, walletTier, bundleConv, walletAddr){
 // \u2500\u2500 Execute Buy \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const t0=performance.now();
+  const _tGate=performance.now(); // perf: gate timing start
 
   // ── PAPER MODE ──
   if(S.paper){
@@ -5552,6 +5598,8 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 
   const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
   const regimeMult=HMM.regimeSizeMultiplier();
+  const _gateMs=performance.now()-_tGate;
+  if(_gateMs>2)console.warn('[PERF] Fast gate:',_gateMs.toFixed(1)+'ms');
   const _aggMult = AGGRESSION.sizeMult();
   const _fastSize = CFG.kelly ? kellySize(_fastConf,w.addr) : CFG.size/100*1e9;
   const sz=Math.min(_fastSize/1e9*bundleMult*regimeMult*_aggMult,(CFG.size/100)*3);
@@ -5608,10 +5656,12 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
       const ppResp = await ppPromise;
       if(!ppResp.ok){const errText=await ppResp.text().catch(()=>'');throw new Error('trade-local '+ppResp.status+': '+errText.slice(0,120));}
       const txBuf=new Uint8Array(await ppResp.arrayBuffer());
-      const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
-      tx.sign([S.keypair]);
-      const ser=tx.serialize();
-      const b64=u8ToB64(ser);
+      let b64;
+      const _workerB64=await signTxAsync(txBuf).catch(()=>null);
+      if(_workerB64){b64=_workerB64;}else{
+        const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
+        tx.sign([S.keypair]);b64=u8ToB64(tx.serialize());
+      }
       const{sig,via}=await raceSubmit(b64);
       return{sig,via,fast:false};
     })();
