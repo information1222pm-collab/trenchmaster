@@ -511,11 +511,18 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
           <div class="mlrow"><div><div class="mllbl">Fee Engine</div><div class="mlsub">Tip floor / fail rate</div></div><div class="mlval n" id="wi-fees" style="font-size:9px">--</div></div>
         </div>
         <div class="mlcard">
+          <div class="mlt">&#x1F680; ADVANCED ALPHA</div>
+          <div class="mlrow"><div><div class="mllbl">Tokens Tracked</div><div class="mlsub">Launch sniper registry</div></div><div class="mlval b" id="p4-tokens">0</div></div>
+          <div class="mlrow"><div><div class="mllbl">Whale Signals</div><div class="mlsub">Large buy detections</div></div><div class="mlval" style="color:var(--spark)" id="p4-whales">0</div></div>
+          <div class="mlrow"><div><div class="mllbl">Correlation</div><div class="mlsub">Multi-signal fusion</div></div><div class="mlval g" id="p4-corr">ACTIVE</div></div>
+        </div>
+        <div class="mlcard">
           <div class="mlt">&#x1F52E; PREDICTION MODELS</div>
           <div class="mlrow"><div><div class="mllbl">Exit Model</div><div class="mlsub">Learned exit timing</div></div><div><span class="mlval b" id="p2-exit-n">0</span><span style="font-size:8px;color:var(--ink3)"> trained</span></div></div>
           <div class="mlrow"><div><div class="mllbl">Exit Confidence</div><div class="mlsub">Model maturity</div></div><div class="mlval b" id="p2-exit-conf">0%</div></div>
           <div class="mlrow"><div><div class="mllbl">Aggression</div><div class="mlsub">Regime-adaptive sizing</div></div><div class="mlval" id="p2-aggression" style="font-size:11px">1.0x</div></div>
           <div class="mlrow"><div><div class="mllbl">Systems Total</div><div class="mlsub">Active ML + quant systems</div></div><div class="mlval g" id="p2-total">--</div></div>
+          <div class="mlrow"><div><div class="mllbl">Exec Engine</div><div class="mlsub">Termux signer service</div></div><div class="mlval" id="p2-engine" style="font-size:9px">CHECKING...</div></div>
         </div>
         <div class="mlcard">
           <div class="mlt">&#x1F9EC; WALLET DARWIN</div>
@@ -3415,6 +3422,28 @@ function mlLearnFromTrade(pos,pnlPct,isWin){
 // Hot path stays direct-call for zero overhead
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENGINE BRIDGE — Connects to MCHPai Execution Engine (localhost:3847)
+// If engine running: signs+submits via engine (faster, key not in browser)
+// If engine down: falls back to in-browser signing
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ENGINE = (() => {
+  const BASE='http://127.0.0.1:3847';
+  let available=false, _enginePubkey='';
+  async function probe(){
+    try{const r=await fetch(BASE+'/status',{signal:AbortSignal.timeout(2000)});if(!r.ok)throw 0;const d=await r.json();available=d.ok&&d.keyLoaded;_enginePubkey=d.pubkey||'';return d;}catch(e){available=false;return null;}
+  }
+  async function buy(mint,amt,tip){const r=await fetch(BASE+'/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint,amount:amt,tip}),signal:AbortSignal.timeout(15000)});const d=await r.json();if(!d.ok)throw new Error(d.error);return d;}
+  async function sell(mint,tip){const r=await fetch(BASE+'/sell',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mint,tip}),signal:AbortSignal.timeout(15000)});const d=await r.json();if(!d.ok)throw new Error(d.error);return d;}
+  async function submit(b64){const r=await fetch(BASE+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tx:b64}),signal:AbortSignal.timeout(15000)});const d=await r.json();if(!d.ok)throw new Error(d.error);return d;}
+  async function syncWallets(addrs){try{await fetch(BASE+'/wallets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addrs}),signal:AbortSignal.timeout(5000)});}catch(e){}}
+  function isAvailable(){return available;}
+  function getPubkey(){return _enginePubkey;}
+  return{probe,buy,sell,submit,syncWallets,isAvailable,getPubkey};
+})();
+
 const BUS = {
   _l: {},
   on(e, fn) { (this._l[e] = this._l[e] || []).push(fn); },
@@ -3835,6 +3864,213 @@ const AGGRESSION = (() => {
   function getLevel() { return compute(); }
 
   return { sizeMult, entryThreshold, getLevel };
+})();
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LAUNCH SNIPER — Detects brand-new token launches
+// When an alpha wallet's first-ever trade on a token arrives, that's a
+// launch buy. These have 3-10x higher expected return than late entries.
+// Tracks token "age" (time since first seen) and trade count.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LAUNCH_SNIPER = (() => {
+  // Token first-seen registry
+  const tokenBirth = {}; // mint -> {firstSeen, tradeCount, firstWallet, firstSol}
+  const FRESH_WINDOW = 30000; // 30s = "fresh launch"
+  const HOT_WINDOW   = 120000; // 2min = "hot token"
+
+  // Record a trade on a token
+  function recordTrade(mint, walletAddr, solAmt) {
+    const now = Date.now();
+    if (!tokenBirth[mint]) {
+      // FIRST EVER TRADE on this token — this is a launch!
+      tokenBirth[mint] = { firstSeen: now, tradeCount: 1, firstWallet: walletAddr, firstSol: solAmt, lastTrade: now };
+      return { isLaunch: true, age: 0, freshness: 1.0 };
+    }
+    const tb = tokenBirth[mint];
+    tb.tradeCount++;
+    tb.lastTrade = now;
+    const age = now - tb.firstSeen;
+    // Freshness score: exponential decay from 1.0 → 0 over 2 minutes
+    const freshness = Math.exp(-age / HOT_WINDOW);
+    return { isLaunch: false, age, freshness, tradeCount: tb.tradeCount };
+  }
+
+  // Is this token a fresh launch? (<30s old)
+  function isFreshLaunch(mint) {
+    const tb = tokenBirth[mint];
+    if (!tb) return false;
+    return (Date.now() - tb.firstSeen) < FRESH_WINDOW;
+  }
+
+  // Get token freshness score (1.0 = just launched, 0 = old)
+  function freshness(mint) {
+    const tb = tokenBirth[mint];
+    if (!tb) return 0;
+    const age = Date.now() - tb.firstSeen;
+    return Math.exp(-age / HOT_WINDOW);
+  }
+
+  // Get token trade velocity (trades per second since birth)
+  function velocity(mint) {
+    const tb = tokenBirth[mint];
+    if (!tb || tb.tradeCount < 2) return 0;
+    const age = Math.max(1, (Date.now() - tb.firstSeen) / 1000);
+    return tb.tradeCount / age;
+  }
+
+  // Cleanup old entries (>10min)
+  function cleanup() {
+    const now = Date.now();
+    for (const mint of Object.keys(tokenBirth)) {
+      if (now - tokenBirth[mint].lastTrade > 600000) delete tokenBirth[mint];
+    }
+  }
+
+  return { recordTrade, isFreshLaunch, freshness, velocity, cleanup,
+    get tokenCount() { return Object.keys(tokenBirth).length; } };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHALE DETECTOR — Identifies large buys from ANY wallet
+// A whale dropping 5+ SOL on a token is a strong directional signal.
+// Tracks large buys per token within a time window.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const WHALE_DETECTOR = (() => {
+  const WHALE_THRESH_SOL = 2.0;  // 2+ SOL = whale buy
+  const MEGA_THRESH_SOL  = 10.0; // 10+ SOL = mega whale
+  const WINDOW_MS        = 120000; // 2 min tracking window
+  const whaleSignals = {}; // mint -> [{ts, sol, addr}]
+  let _totalWhales = 0;
+
+  // Check if a trade is a whale buy
+  function check(mint, solAmt, addr) {
+    if (solAmt < WHALE_THRESH_SOL) return null;
+
+    if (!whaleSignals[mint]) whaleSignals[mint] = [];
+    const now = Date.now();
+    whaleSignals[mint].push({ ts: now, sol: solAmt, addr });
+
+    // Prune old signals
+    whaleSignals[mint] = whaleSignals[mint].filter(s => now - s.ts < WINDOW_MS);
+    _totalWhales++;
+
+    const isMega = solAmt >= MEGA_THRESH_SOL;
+    const totalWhaleSol = whaleSignals[mint].reduce((s, w) => s + w.sol, 0);
+    const whaleCount = whaleSignals[mint].length;
+
+    return {
+      isWhale: true,
+      isMega,
+      sol: solAmt,
+      totalWhaleSol,
+      whaleCount,
+      // Whale pressure score: how much whale money is flowing into this token
+      pressure: Math.min(1, totalWhaleSol / 20), // 20 SOL = max pressure
+    };
+  }
+
+  // Get whale pressure for a token (0-1)
+  function pressure(mint) {
+    const sigs = whaleSignals[mint];
+    if (!sigs) return 0;
+    const now = Date.now();
+    const recent = sigs.filter(s => now - s.ts < WINDOW_MS);
+    const total = recent.reduce((s, w) => s + w.sol, 0);
+    return Math.min(1, total / 20);
+  }
+
+  // Cleanup
+  function cleanup() {
+    const now = Date.now();
+    for (const mint of Object.keys(whaleSignals)) {
+      whaleSignals[mint] = whaleSignals[mint].filter(s => now - s.ts < WINDOW_MS);
+      if (!whaleSignals[mint].length) delete whaleSignals[mint];
+    }
+  }
+
+  return { check, pressure, cleanup, get totalWhales() { return _totalWhales; } };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGNAL CORRELATOR — Multi-signal fusion engine
+// When 2+ INDEPENDENT signals align on same token within 60s,
+// that's a high-conviction entry. Tracks signal types per token.
+// Signal types: wallet_buy, bundle_prop, whale_buy, fresh_launch,
+//               hot_session, intent_high
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CORRELATOR = (() => {
+  const WINDOW_MS = 60000; // 60s correlation window
+  const tokenSignals = {}; // mint -> [{type, ts, weight}]
+
+  const SIGNAL_WEIGHTS = {
+    wallet_buy:    1.0,  // alpha wallet bought
+    bundle_prop:   1.2,  // bundle propagation detected
+    whale_buy:     1.5,  // whale entered
+    mega_whale:    2.0,  // mega whale
+    fresh_launch:  1.3,  // brand new token
+    hot_session:   0.8,  // wallet in hot session
+    intent_high:   0.7,  // high intent score on source wallet
+    liquidity_surge: 1.1, // liquidity health surging
+  };
+
+  // Record a signal on a token
+  function record(mint, type) {
+    if (!tokenSignals[mint]) tokenSignals[mint] = [];
+    tokenSignals[mint].push({ type, ts: Date.now(), weight: SIGNAL_WEIGHTS[type] || 1.0 });
+    // Prune old
+    const now = Date.now();
+    tokenSignals[mint] = tokenSignals[mint].filter(s => now - s.ts < WINDOW_MS);
+  }
+
+  // Get correlation score for a token
+  // Returns: { score (0-1), signalCount, uniqueTypes, signals }
+  function score(mint) {
+    const sigs = tokenSignals[mint];
+    if (!sigs || sigs.length === 0) return { score: 0, signalCount: 0, uniqueTypes: 0 };
+
+    const now = Date.now();
+    const recent = sigs.filter(s => now - s.ts < WINDOW_MS);
+    if (recent.length === 0) return { score: 0, signalCount: 0, uniqueTypes: 0 };
+
+    // Count unique signal types (independent signals matter more)
+    const types = new Set(recent.map(s => s.type));
+    const uniqueTypes = types.size;
+
+    // Weighted score: sum of weights, bonus for diversity
+    let weightedSum = 0;
+    for (const s of recent) weightedSum += s.weight;
+
+    // Diversity bonus: 2 types = 1.3x, 3 types = 1.6x, 4+ types = 2.0x
+    const diversityMult = uniqueTypes >= 4 ? 2.0 : uniqueTypes >= 3 ? 1.6 : uniqueTypes >= 2 ? 1.3 : 1.0;
+
+    // Normalize to 0-1 range (5 weighted points = 1.0)
+    const rawScore = (weightedSum * diversityMult) / 5;
+
+    return {
+      score: Math.min(1, rawScore),
+      signalCount: recent.length,
+      uniqueTypes,
+      signals: [...types],
+    };
+  }
+
+  // Cleanup
+  function cleanup() {
+    const now = Date.now();
+    for (const mint of Object.keys(tokenSignals)) {
+      tokenSignals[mint] = tokenSignals[mint].filter(s => now - s.ts < WINDOW_MS);
+      if (!tokenSignals[mint].length) delete tokenSignals[mint];
+    }
+  }
+
+  return { record, score, cleanup };
 })();
 
 
@@ -4867,7 +5103,18 @@ async function _bootTrader(label) {
   // Pre-warm Jito endpoints
   JITO_ENDPOINTS.forEach(ep=>fetch(ep+'/api/v1/bundles',{method:'OPTIONS'}).catch(()=>{}));
   // Phase 1 systems init
-  setInterval(()=>WALLET_INTENT.cleanup(), 300000); // cleanup stale sessions every 5min
+  setInterval(()=>{WALLET_INTENT.cleanup();LAUNCH_SNIPER.cleanup();WHALE_DETECTOR.cleanup();CORRELATOR.cleanup();}, 300000); // cleanup stale sessions every 5min
+  // Engine bridge: probe for local execution engine
+  ENGINE.probe().then(d=>{
+    if(d&&d.ok){
+      addFeed('info','\u{1F680} ENGINE CONNECTED','pubkey='+(d.pubkey||'').slice(0,8)+'...');
+      toast('\u{1F680} Execution Engine online','trade');
+      ENGINE.syncWallets(ADDRS);
+    } else {
+      addFeed('info','\u{1F310} Engine offline','using in-browser execution');
+    }
+  }).catch(()=>{});
+  setInterval(()=>ENGINE.probe().catch(()=>{}), 30000);
   console.log('[MCHPai] Boot complete + Phase 1 systems online \u2713');
 }
 
@@ -5155,7 +5402,21 @@ function onMsg(m){
   S.signals++;
   // INTENT ENGINE: record ALL wallet activity (buys + sells)
   const _isBuyQ=m.is_buy===true||m.is_buy===1||m.txType==='buy';
-  WALLET_INTENT.recordActivity(trader,m.mint,m.sol_amount??m.solAmount??0,_isBuyQ);
+  const _sigSol=m.sol_amount??m.solAmount??0;
+  WALLET_INTENT.recordActivity(trader,m.mint,_sigSol,_isBuyQ);
+  // LAUNCH SNIPER: track token birth + freshness
+  const _launch=LAUNCH_SNIPER.recordTrade(m.mint,trader,_sigSol);
+  // WHALE DETECTOR: flag large buys
+  if(_isBuyQ&&_sigSol>0){const _wh=WHALE_DETECTOR.check(m.mint,_sigSol,trader);
+    if(_wh){CORRELATOR.record(m.mint,_wh.isMega?'mega_whale':'whale_buy');addFeed('buy','\u{1F40B} '+((_wh.isMega?'MEGA ':'')+'WHALE: ')+_sigSol.toFixed(1)+'\u25ce on '+(m.symbol||m.mint?.slice(0,6)),'pressure='+_wh.pressure.toFixed(2)+' count='+_wh.whaleCount);}
+  }
+  // CORRELATOR: record base wallet buy signal
+  if(_isBuyQ){
+    CORRELATOR.record(m.mint,'wallet_buy');
+    if(_launch.isLaunch||_launch.freshness>0.7)CORRELATOR.record(m.mint,'fresh_launch');
+    if(WALLET_INTENT.isHotSession(trader))CORRELATOR.record(m.mint,'hot_session');
+    if(WALLET_INTENT.intentScore(trader)>0.6)CORRELATOR.record(m.mint,'intent_high');
+  }
   const rAt=m._rxAt||performance.now();
 
   const mint=m.mint;
@@ -5179,6 +5440,7 @@ function onMsg(m){
   const sym=m.symbol||m.name||mint.slice(0,6)+'...';
   const bundleId_ct=getBundleId(w.addr);
   const bConv_ct=getBundleConviction(mint,bundleId_ct)||1.0;
+  if(bConv_ct>=1.5)CORRELATOR.record(mint,'bundle_prop');
   if(canTrade(mint,w.tier,bConv_ct,w.addr)){
     // FIRE TRADE IMMEDIATELY — zero delay, no microtask deferral
     doBuy(mint,sym,w,solAmt,tokAmt,rAt);
@@ -5270,11 +5532,15 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   // SGD prediction (sync, <0.1ms)
   const _sgdX = ONLINE_SGD.buildX(w.tier||'B',w.rank,w.wr7d||0,w.pnl7d||0,1.0,solAmt,_rugEst,_pumpEst,HMM.currentRegime().idx,HMM.currentRegime().conf,w.bundleSize||1,false);
   const _sgdPred = ONLINE_SGD.confidence() > 0.3 ? ONLINE_SGD.predict(_sgdX) : 0.55;
-  // INTENT ENGINE: hot session + bundle propagation boost
+  // INTENT ENGINE + CORRELATOR + LAUNCH SNIPER
   const _intentScore = WALLET_INTENT.intentScore(w.addr);
   const _isHot = WALLET_INTENT.isHotSession(w.addr);
   const _bundleProp = WALLET_INTENT.bundlePropagation(mint, getBundleId(w.addr));
-  const _intentBoost = (_isHot ? 0.08 : 0) + (_intentScore > 0.6 ? 0.05 : 0) + (_bundleProp > 0.5 ? 0.06 : 0);
+  const _corrScore = CORRELATOR.score(mint);
+  const _freshness = LAUNCH_SNIPER.freshness(mint);
+  const _whalePressure = WHALE_DETECTOR.pressure(mint);
+  const _intentBoost = (_isHot ? 0.06 : 0) + (_intentScore > 0.6 ? 0.04 : 0) + (_bundleProp > 0.5 ? 0.05 : 0)
+    + (_corrScore.score > 0.5 ? 0.06 : 0) + (_freshness > 0.7 ? 0.05 : 0) + (_whalePressure > 0.3 ? 0.04 : 0);
 
   // Combined fast confidence: weighted blend + intent intelligence
   const _fastConf = Math.min(0.95,
@@ -5574,7 +5840,10 @@ async function raceSubmit(b64){
     throw new Error('rpc'+i);
   })()));
 
-  // ── Ankr free RPC: fire-and-forget broadcast (not in race, zero latency cost)
+  // Engine bridge: if available, add engine submit to the race
+  if(ENGINE.isAvailable()){sends.push((async()=>{const d=await ENGINE.submit(b64);return{sig:d.sig,via:'engine-'+d.via};})());}
+
+  // Ankr free RPC: fire-and-forget broadcast
   fetch('https://rpc.ankr.com/solana',{method:'POST',
     headers:_JSON_HDR,body:rpcBody}).catch(()=>{});
 
@@ -5740,13 +6009,17 @@ function renderUI(){
   setText('wi-sessions',WALLET_INTENT.sessionCount);
   setText('wi-signals',WALLET_INTENT.totalSignals);
   setText('wi-fees','tip='+FEE_ENGINE.tipFloor.toFixed(4)+' fail='+(FEE_ENGINE.failRate*100).toFixed(0)+'%');
+  // Phase 4 stats
+  setText('p4-tokens',LAUNCH_SNIPER.tokenCount);
+  setText('p4-whales',WHALE_DETECTOR.totalWhales);
   // Phase 2 stats
   setText('p2-exit-n',EXIT_MODEL.trainCount||0);
   setText('p2-exit-conf',(EXIT_MODEL.confidence()*100).toFixed(0)+'%');
   const _agg=AGGRESSION.getLevel();
   const _aggEl=document.getElementById('p2-aggression');
   if(_aggEl){_aggEl.textContent=_agg.toFixed(2)+'x';_aggEl.style.color=_agg>1.2?'var(--go)':_agg<0.7?'var(--stop)':'var(--hold)';}
-  setText('p2-total','14 SYSTEMS');
+  setText('p2-total',(ENGINE.isAvailable()?'15':'14')+' SYSTEMS');
+  const _engEl=document.getElementById('p2-engine');if(_engEl){if(ENGINE.isAvailable()){_engEl.textContent='ONLINE '+ENGINE.getPubkey().slice(0,6);_engEl.style.color='var(--go)';}else{_engEl.textContent='OFFLINE (browser)';_engEl.style.color='var(--ink3)';}}
   const _ds=WALLET_DARWIN.stats();
   setText('dw-tracked',_ds.tracked);setText('dw-blacklisted',_ds.blacklisted);
   setText('dw-tiers','S:'+(_ds.tiers.S||0)+' A:'+(_ds.tiers.A||0)+' B:'+(_ds.tiers.B||0)+' C:'+(_ds.tiers.C||0)+' X:'+(_ds.tiers.X||0));
