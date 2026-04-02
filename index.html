@@ -5938,9 +5938,10 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 
     S._posCount++;
     const _posPool = getPoolType(mint); // snapshot pool at buy time
+    const _boughtVia = winner.fast ? 'lightning' : (via||'trade-local'); // CRITICAL: track which wallet has the tokens
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
       sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
-      priceTickCount:0,sig,conf:_fastConf,status:'pending',_pool:_posPool,
+      priceTickCount:0,sig,conf:_fastConf,status:'pending',_pool:_posPool,_boughtVia,
       bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:0.15,_lastPumpScore:0.65,_lastSgdProb:0.5,_lastWalletScore:_wtScore,_lastNtmScore:0.5};
     S.risk.daily++;
     if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
@@ -5967,7 +5968,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
         S._posCount++;
         S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
           sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
-          priceTickCount:0,sig,conf:_fastConf,status:'pending',bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:0.15,_lastPumpScore:0.65,_lastSgdProb:0.5,_lastWalletScore:_wtScore||0.5,_lastNtmScore:0.5};
+          priceTickCount:0,sig,conf:_fastConf,status:'pending',_boughtVia:'lightning',bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:0.15,_lastPumpScore:0.65,_lastSgdProb:0.5,_lastWalletScore:_wtScore||0.5,_lastNtmScore:0.5};
         S.risk.daily++;
         if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
         S.wstats[w.rank].copies++;
@@ -6019,7 +6020,48 @@ async function doSell(mint,reason){
 
   const t0sell=performance.now();
   const tip=FEE_ENGINE.optimalTip();
-  console.log('[MCHPai] LIVE SELL:',pos.sym,'mint='+mint.slice(0,12),'reason='+reason);
+  const _isEmergency = reason.includes('safety')||reason.includes('honeypot')||reason.includes('stale');
+  console.log('[MCHPai] LIVE SELL:',pos.sym,'mint='+mint.slice(0,12),'reason='+reason,'boughtVia='+(pos._boughtVia||'unknown'));
+
+  // ══ CRITICAL: Route sell to the wallet that HOLDS the tokens ══════════
+  // Lightning-bought tokens live in PumpPortal's wallet (NOT S.pubkey).
+  // trade-local sells from S.pubkey → will FAIL if Lightning bought.
+  // Fix: try Lightning sell FIRST for Lightning-bought positions.
+  if(pos._boughtVia==='lightning' && HC.ppKey && _lightningUrl){
+    console.log('[MCHPai] Lightning-bought → selling via Lightning first');
+    try{
+      const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
+        body:buildSellBody(mint,tip,_isEmergency),keepalive:true});
+      if(!r.ok)throw new Error('Lightning sell '+r.status);
+      const sig=(await r.text()).trim().replace(/"/g,'');
+      const clMs=Math.round(performance.now()-t0sell);
+      console.log('[MCHPai] \u2705 Lightning sell OK (matched wallet):',sig);
+      const isWin=pnlPct>0;
+      if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
+      S.totalPnl+=pnlSOL;
+      const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
+      if(isWin)st.wins++;else st.losses++;st.pnl+=pnlSOL;st.totalHold+=holdSecs;
+      _bumpWStats(); DB.markDirty('wstats'); DB.markDirty('positions');
+      if(S.risk.consec>=CFG.cbLimit){S.risk.cb=true;}
+      S.log.unshift({sym:pos.sym,mint,pnlPct,pnlSOL,reason,holdSecs,win:isWin,ts:Date.now()});
+      if(S.log.length>200)S.log.pop();
+      if(sig)S.pendingConf[sig]={mint,type:'sell',ts:Date.now()};
+      if(S.ws?.readyState===1)S.ws.send(WS_UNSUB_TOK(mint));
+      toast((isWin?'\ud83d\udcb0':'\ud83d\udcc9')+' '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'% \u26a1Lightning',isWin?'close':'loss');
+      addFeed(isWin?'win':'loss','\u26a1 SOLD '+pos.sym+' via Lightning (matched wallet)',''+clMs+'ms');
+      queueMicrotask(async()=>{
+        await DB.savePosition(mint);
+        await DB.saveTradeLog({sym:pos.sym,mint,pnlPct,pnlSOL,reason,holdSecs,win:isWin,tier:pos.tier,ts:Date.now()});
+        CALIBRATOR.processTrade(mint,pos,pnlPct);ATR_STOP.clean(mint);
+        setTimeout(()=>{mlLearnFromTrade(pos,pnlPct,isWin);WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);},0);
+      });
+      return; // success — done
+    }catch(lightErr){
+      console.warn('[MCHPai] Lightning-first sell failed:',lightErr.message);
+      addFeed('warn','\u26a0 Lightning sell failed — falling to trade-local',lightErr.message.slice(0,50));
+    }
+  }
+
   try{
     // ── PRIMARY: trade-local → sign with YOUR key → submit ──
     const ppResp=await fetch('https://pumpportal.fun/api/trade-local',{
@@ -6318,6 +6360,14 @@ function posMonitor(){
     if(pos.priceTickCount===0 && (now-pos.entryTime)>300000){
       addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 5min — auto-closing');
       queueMicrotask(()=>doSell(mint,'stale_no_ticks'));
+      continue;
+    }
+    // HARD TIMEOUT: 30 minutes max hold — emergency exit regardless of conditions
+    // Prevents positions from being stuck indefinitely if all other exit logic fails
+    if((now-pos.entryTime)>1800000){
+      const _toPnl = pos.entryPrice>0 ? ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100 : 0;
+      addFeed('warn','\u23f0 HARD TIMEOUT: '+pos.sym,'30min max hold — pnl='+_toPnl.toFixed(1)+'%');
+      queueMicrotask(()=>doSell(mint,'hard_timeout_30min'));
       continue;
     }
     // Re-subscribe stuck positions (have entry but stopped getting ticks for 60s)
