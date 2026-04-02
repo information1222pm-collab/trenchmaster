@@ -5889,29 +5889,18 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   }).catch(()=>{});
 
   try{
-    // ── PARALLEL: trade-local (primary) + Lightning (secondary) ──
-    const ppPromise = fetch('https://pumpportal.fun/api/trade-local',{
-      method:'POST',headers:_JSON_HDR,body:_ppBody,
-    });
-    // Fire Lightning in parallel — RACE both paths
-    let lightningRacePromise = null;
-    if(HC.ppKey&&_lightningUrl){
-      lightningRacePromise = (async()=>{
-        try{
-          const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
-            body:buildBuyBody(mint,sz,tip),keepalive:true});
-          if(!r.ok)throw new Error('lightning_'+r.status);
-          const sig=(await r.text()).trim().replace(/"/g,'');
-          if(sig&&sig.length>20)return{sig,via:'lightning',fast:true};
-          throw new Error('bad_sig');
-        }catch(e){throw e;}
-      })();
-    }
+    // ══ SEQUENTIAL BUY: trade-local FIRST → Lightning FALLBACK ONLY ══════
+    // NEVER race both paths simultaneously — racing causes double-buys
+    // (tokens purchased in BOTH wallets, one becomes orphaned forever).
+    // trade-local = tokens go to YOUR wallet (S.pubkey) = you control the sell
+    // Lightning = tokens go to PumpPortal's wallet = must sell via Lightning
+    let sig, via, _boughtVia;
 
-    // RACE: trade-local sign path vs Lightning direct
-    // If Lightning wins, we skip the sign+submit entirely
-    const tradeLocalPath = (async()=>{
-      const ppResp = await ppPromise;
+    // ── STEP 1: Try trade-local (tokens land in YOUR wallet) ──
+    try {
+      const ppResp = await fetch('https://pumpportal.fun/api/trade-local',{
+        method:'POST',headers:_JSON_HDR,body:_ppBody,
+      });
       if(!ppResp.ok){const errText=await ppResp.text().catch(()=>'');throw new Error('trade-local '+ppResp.status+': '+errText.slice(0,120));}
       const txBuf=new Uint8Array(await ppResp.arrayBuffer());
       let b64;
@@ -5920,25 +5909,31 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
         const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
         tx.sign([S.keypair]);b64=u8ToB64(tx.serialize());
       }
-      const{sig,via}=await raceSubmit(b64);
-      return{sig,via,fast:false};
-    })();
+      const result=await raceSubmit(b64);
+      sig=result.sig; via=result.via; _boughtVia='trade-local';
+    } catch(localErr) {
+      // ── STEP 2: trade-local failed → try Lightning (tokens land in PP wallet) ──
+      if(!HC.ppKey||!_lightningUrl) throw localErr; // no Lightning available, propagate error
+      console.warn('[MCHPai] trade-local buy failed:',localErr.message,'→ trying Lightning');
+      addFeed('warn','\u26a0 trade-local failed — trying Lightning',localErr.message.slice(0,50));
+      const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
+        body:buildBuyBody(mint,sz,tip),keepalive:true});
+      if(!r.ok)throw new Error('Lightning buy '+r.status+': '+(await r.text().catch(()=>'')).slice(0,80));
+      sig=(await r.text()).trim().replace(/"/g,'');
+      if(!sig||sig.length<20)throw new Error('Lightning bad sig');
+      via='lightning'; _boughtVia='lightning';
+      addFeed('buy','\u26a1 Lightning buy OK: '+sym,'');
+    }
 
-    const racePaths = [tradeLocalPath];
-    if(lightningRacePromise) racePaths.push(lightningRacePromise);
-    const winner = await Promise.any(racePaths);
-    const sig=winner.sig, via=winner.via;
-    if(winner.fast)addFeed('buy','\u26a1 LIGHTNING WON race for '+sym,'');
     const execMs=Math.round(performance.now()-tExec);
     const totMs=Math.round(performance.now()-t0);
     S.latExec.push(execMs);if(S.latExec.length>500)S.latExec.shift();
 
-    console.log('[MCHPai] \u2705 LIVE BUY SUCCESS:',sym,sz.toFixed(4),'SOL via',via,'sig='+sig);
+    console.log('[MCHPai] \u2705 LIVE BUY SUCCESS:',sym,sz.toFixed(4),'SOL via',via,'('+_boughtVia+') sig='+sig);
     console.log('[MCHPai] Verify: https://solscan.io/tx/'+sig);
 
     S._posCount++;
-    const _posPool = getPoolType(mint); // snapshot pool at buy time
-    const _boughtVia = winner.fast ? 'lightning' : (via||'trade-local'); // CRITICAL: track which wallet has the tokens
+    const _posPool = getPoolType(mint);
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
       sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
       priceTickCount:0,sig,conf:_fastConf,status:'pending',_pool:_posPool,_boughtVia,
@@ -5954,37 +5949,10 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
     toast('\u26a1 '+sym+' '+sz.toFixed(3)+'\u25ce '+totMs+'ms '+via,'trade');
     addFeed('buy','\u2705 BOUGHT '+sym,totMs+'ms via '+via+' sig='+sig.slice(0,12)+'...');
   }catch(err){
-    console.error('[MCHPai] BUY FAILED:',err.message,err);
-    // ── FALLBACK: Lightning API (if PP key available) ──
-    if(HC.ppKey&&_lightningUrl){
-      addFeed('warn','\u26a0 trade-local failed \u2014 trying Lightning',''+err.message.slice(0,60));
-      try{
-        const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
-          body:buildBuyBody(mint,sz,tip),keepalive:true});
-        if(!r.ok)throw new Error('Lightning '+r.status+': '+await r.text());
-        const sig=(await r.text()).trim().replace(/"/g,'');
-        const totMs=Math.round(performance.now()-t0);
-        console.log('[MCHPai] \u2705 Lightning fallback OK:',sig);
-        S._posCount++;
-        S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
-          sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
-          priceTickCount:0,sig,conf:_fastConf,status:'pending',_boughtVia:'lightning',bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:0.15,_lastPumpScore:0.65,_lastSgdProb:0.5,_lastWalletScore:_wtScore||0.5,_lastNtmScore:0.5};
-        S.risk.daily++;
-        if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
-        S.wstats[w.rank].copies++;
-        if(S.ws?.readyState===1)S.ws.send(WS_SUB_TOK(mint));
-        if(sig)S.pendingConf[sig]={mint,type:'buy',ts:Date.now()};
-        toast('\u26a1 '+sym+' '+sz.toFixed(3)+'\u25ce '+totMs+'ms Lightning','trade');
-        addFeed('buy','\u2705 '+sym,totMs+'ms Lightning sig='+sig.slice(0,12)+'...');
-      }catch(err2){
-        console.error('[MCHPai] BOTH PATHS FAILED:',err2.message);
-        toast('\u274c Buy failed: '+err2.message.slice(0,50),'warn');
-        addFeed('warn','\u274c FAILED '+sym,'Local: '+err.message.slice(0,40)+' | Lightning: '+err2.message.slice(0,40));
-      }
-    }else{
-      toast('\u274c Buy failed: '+err.message.slice(0,60),'warn');
-      addFeed('warn','\u274c FAILED '+sym,err.message.slice(0,80));
-    }
+    // Both trade-local AND Lightning (if available) already failed inside the try block
+    console.error('[MCHPai] BUY FAILED (all paths):',err.message);
+    toast('\u274c Buy failed: '+err.message.slice(0,60),'warn');
+    addFeed('warn','\u274c FAILED '+sym,err.message.slice(0,80));
   }
 }
 
