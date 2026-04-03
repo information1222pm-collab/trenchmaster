@@ -609,7 +609,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
           <div class="srow"><div><div class="slbl">Take Profit</div><div class="ssub">% gain → lock profits</div></div><div class="sinp"><button class="sbtn" onclick="adj('takeProfit',-10)">-</button><span class="sval" id="sv-tpf">60%</span><button class="sbtn" onclick="adj('takeProfit',+10)">+</button></div></div>
           <div class="srow"><div><div class="slbl">Max Hold (min)</div><div class="ssub">Time limit per position</div></div><div class="sinp"><button class="sbtn" onclick="adj('maxHoldMin',-1)">-</button><span class="sval" id="sv-mh">10</span><button class="sbtn" onclick="adj('maxHoldMin',+1)">+</button></div></div>
           <div class="srow"><div><div class="slbl">Session Drawdown</div><div class="ssub">Session PnL % halt threshold</div></div><div class="sinp"><button class="sbtn" onclick="adj('sessionDD',5)">-</button><span class="sval" id="sv-sd">-20%</span><button class="sbtn" onclick="adj('sessionDD',-5)">+</button></div></div>
-          <div class="tglrow"><div><div class="slbl">Require GMGN Rank</div><div class="ssub">Block unranked wallets from trading</div></div><label class="tgl"><input type="checkbox" id="t-reqgmgn" checked onchange="CFG.requireGmgn=this.checked;saveCfg()"><span class="tslider"></span></label></div>
+          <div class="tglrow"><div><div class="slbl">Require GMGN Rank</div><div class="ssub">Block unranked wallets from trading</div></div><label class="tgl"><input type="checkbox" id="t-reqgmgn" onchange="CFG.requireGmgn=this.checked;saveCfg()"><span class="tslider"></span></label></div>
         </div>
         <div class="sgrp">
           <div class="sgt">POSITION SIZING</div>
@@ -2954,8 +2954,7 @@ async function runGmgnRanker() {
     `S:${s} A:${a} \u2014 wallets re-tiered by real WR`);
   if(!_gmgnFirstPassDone){
     _gmgnFirstPassDone = true;
-    addFeed('info', '\u2705 GMGN GATE OPEN', 'Trading now enabled — wallets ranked');
-    toast('\u2705 GMGN ranked — trading enabled', 'trade');
+    addFeed('info', '\u2705 GMGN first pass done', 'Wallet tiers updated with real data');
   }
   _gmgnRunning = false;
 }
@@ -7321,10 +7320,10 @@ async function testTrade(){
   _l('📋','S.risk.daily = '+S.risk.daily+'/'+CFG.daily+(S.risk.daily>=CFG.daily?' ❌ LIMIT REACHED — click RESET DAILY COUNTER':' ✅'));
   _l('📋','Daily reset in: '+Math.max(0,Math.round((S.risk.dailyReset-Date.now())/60000))+'min');
   _l('📋','EXIT: hardStop='+CFG.hardStop+'% | trailDrop='+CFG.trailDrop+'% | takeProfit=+'+CFG.takeProfit+'% | maxHold='+CFG.maxHoldMin+'min | sessionDD='+CFG.sessionDD+'%');
-  _l('📋','GMGN gating = '+(CFG.requireGmgn!==false?'✅ ON — unranked wallets blocked':'❌ OFF — all wallets can trade'));
+  _l('📋','GMGN gating = ❌ OFF — all wallets can trade (gates removed)');
   const _rankedCount = WALLETS.filter(w=>w.gmgnUpdated>0).length;
-  _l('📋','GMGN ranked: '+_rankedCount+'/'+WALLETS.length+' wallets'+ (_rankedCount===0?' ❌ NONE RANKED — bot will block all trades until GMGN runs':' ✅'));
-  _l('📋','Confidence threshold: LIVE=0.52 base (AGGRESSION-adjusted: '+AGGRESSION.entryThreshold(0.52).toFixed(3)+') | PAPER=0.38 | GMGN gate: ENFORCED | Dust filter: <0.05 SOL blocked');
+  _l('📋','GMGN ranked: '+_rankedCount+'/'+WALLETS.length+' wallets (informational only — does NOT block trades)');
+  _l('📋','Entry gates: ALL REMOVED — trades flow on any wallet signal. ML scores used for sizing only.');
   _l('📋','HMM regime = '+HMM.currentRegime().name+' conf='+HMM.currentRegime().conf.toFixed(2));
   _l('📋','WS connected = '+(S.ws?.readyState===1?'✅ YES':'❌ NO'));
   _l('📋','POOL_STATE cache = '+POOL_STATE.size+' tokens tracked');
