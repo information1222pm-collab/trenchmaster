@@ -2415,6 +2415,13 @@ function _rebuildLightningUrl(){ _lightningUrl = 'https://pumpportal.fun/api/tra
 
 // \u2500\u2500 Config \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:50,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true,hardStop:-15,trailDrop:-20,takeProfit:60,maxHoldMin:10,sessionDD:-20,requireGmgn:true};
+let _gmgnFirstPassDone = false; // tracks if GMGN ranker has run (informational only)
+let _gmgnGotData = false; // true only if GMGN actually returned real data for at least 1 wallet
+const _recentLossMints = new Set(); // tokens we already lost on — don't re-enter
+const _recentBuyMints = new Map(); // mint → timestamp, prevents bundle pile-in
+setInterval(()=>_recentLossMints.clear(), 3600000); // clear hourly
+setInterval(()=>{const now=Date.now();for(const[k,ts]of _recentBuyMints)if(now-ts>30000)_recentBuyMints.delete(k);},10000);
+const _sellRetryQueue = new Map(); // mint → {pos, reason, attempts, nextRetryAt}
 function loadCfg(){try{const s=localStorage.getItem('mchpai_cfg');if(s)Object.assign(CFG,JSON.parse(s))}catch(e){}}
 function saveCfg(){
   CFG.jito=document.getElementById('t-jito')?.checked??true;
@@ -2916,6 +2923,7 @@ async function runGmgnRanker() {
     await Promise.allSettled(batch.map(async (w) => {
       const stats = await fetchGmgnWallet(w.addr);
       if (stats) {
+        _gmgnGotData = true; // at least one wallet ranked — enable GMGN filtering
         w.wr7d  = stats.wr7d;
         w.pnl7d = stats.pnl7d;
         w.gmgnUpdated = Date.now();
@@ -2938,6 +2946,11 @@ async function runGmgnRanker() {
   const a = WALLETS.filter(w=>w.tier==='A').length;
   addFeed('info', '\u2705 GMGN ranking complete',
     `S:${s} A:${a} \u2014 wallets re-tiered by real WR`);
+  if(!_gmgnFirstPassDone){
+    _gmgnFirstPassDone = true;
+    addFeed('info', '\u2705 GMGN GATE OPEN', 'Trading now enabled — wallets ranked');
+    toast('\u2705 GMGN ranked — trading enabled', 'trade');
+  }
   _gmgnRunning = false;
 }
 
@@ -5499,6 +5512,25 @@ async function _bootTrader(label) {
   renderWallets();
   initWS();
   setInterval(posMonitor,250);
+  // Aggressive sell retry loop — retries failed sells every 15s up to 6 times
+  setInterval(async()=>{
+    if(!_sellRetryQueue.size)return;
+    const now=Date.now();
+    for(const[mint,r]of _sellRetryQueue){
+      if(now<r.nextRetryAt)continue;
+      if(r.attempts>=6){
+        addFeed('warn','\u274c SELL GAVE UP: '+r.pos.sym,'6 retries failed. Manual sell on Phantom.');
+        toast('\u274c Manual sell needed: '+r.pos.sym,'warn');
+        _sellRetryQueue.delete(mint);continue;
+      }
+      r.attempts++;r.nextRetryAt=now+15000;
+      addFeed('info','\u{1F504} SELL RETRY #'+r.attempts+': '+r.pos.sym,'reason='+r.reason);
+      if(!S.positions[mint]){S.positions[mint]=r.pos;S._posCount++;}
+      try{await doSell(mint,r.reason+'_retry'+r.attempts);
+        if(!S.positions[mint])_sellRetryQueue.delete(mint);
+      }catch(e){console.warn('[MCHPai] Sell retry error:',e.message);}
+    }
+  },15000);
   setInterval(()=>refreshBal().catch(()=>{}),30000);
 
   (function(){
@@ -5872,6 +5904,14 @@ function onMsg(m){
   const sym=m.symbol||m.name||mint.slice(0,6)+'...';
   if(canTrade(mint,w.tier,getBundleConviction(mint,getBundleId(w.addr))||1.0,w.addr)){
     doBuy(mint,sym,w,solAmt,tokAmt,rAt);
+  } else if(!S.positions[mint] && !S.paused) {
+    // Log WHY signal was blocked (only meaningful blocks, skip already-held)
+    const _reason = (_gmgnGotData && !WMAP[w.addr]?.gmgnUpdated) ? 'UNRANKED' :
+      (_gmgnGotData && WMAP[w.addr]?.wr7d < 0.45) ? 'LOW_WR_'+((WMAP[w.addr]?.wr7d*100)||0).toFixed(0)+'%' :
+      _recentLossMints.has(mint) ? 'RECENT_LOSS' :
+      (S._posCount>=CFG.maxpos) ? 'MAX_POS' :
+      (w.tier==='C'||w.tier==='X') ? 'BAD_TIER' : 'FILTER';
+    addFeed('info','\u{1F6AB} SKIP W#'+w.rank+'['+w.tier+'] '+sym, _reason);
   }
 
   // ═══ DEFERRED WORK — runs AFTER buy fires, on next microtask ═══
@@ -5910,8 +5950,12 @@ function canTrade(mint, walletTier, bundleConv, walletAddr){
   if(S._posCount>=CFG.maxpos)return false;
   // Pre-trade safety: block tokens flagged with active mint/freeze authority
   if(isKnownUnsafe(mint))return false;
-  // GMGN GATING: block unranked wallets until they have real stats
-  if(CFG.requireGmgn !== false && walletAddr){
+  // TOKEN-LEVEL FILTER: block tokens we've already seen and lost on
+  if(_recentLossMints.has(mint))return false;
+  // BUNDLE PILE-IN GUARD: if we just rejected/bought this mint in last 30s, skip
+  if(_recentBuyMints.has(mint))return false;
+  // GMGN GATING: only enforce if ranker actually returned data for at least 1 wallet
+  if(_gmgnGotData && walletAddr){
     const _w = WMAP[walletAddr];
     if(_w && !_w.gmgnUpdated){return false;} // never ranked → block
     if(_w && _w.wr7d < 0.45){return false;}  // ranked but bad WR → block
@@ -5947,22 +5991,32 @@ function canTrade(mint, walletTier, bundleConv, walletAddr){
 async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const t0=performance.now();
   const _tGate=performance.now(); // perf: gate timing start
+  _recentBuyMints.set(mint, Date.now()); // prevent bundle pile-in on same token
 
   // ── PAPER MODE ──
   if(S.paper){
-    // Paper mode STILL needs a confidence gate — without it, every signal triggers a buy
+    // Paper mode confidence gate — raised to 0.50 to stop random coin entries
     const _paperPumpEst = w.tier==='S'?0.75:w.tier==='A'?0.68:0.60;
     const _paperRugEst = w.rank<=5?0.10:w.rank<=20?0.12:0.15;
     const _paperWt = WALLET_TRUST.getScore(w.addr).score;
     const _paperConf = _paperPumpEst*(1-_paperRugEst)*0.25 + _paperWt*0.20 + confBoost(w)*1.5;
     if(_paperConf < 0.32){
+      addFeed('info','\u{1F6AB} CONF SKIP W#'+w.rank+'['+w.tier+'] '+sym, 'conf='+_paperConf.toFixed(3)+' < 0.32');
       return; // below minimum confidence even for paper
     }
-    const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
+    // TOKEN QUALITY GATE: require the triggering wallet to have put meaningful SOL in
+    // If the alpha wallet only put in dust (<0.05 SOL), skip — probably a test/spam tx
+    if(solAmt > 0 && solAmt < 0.01){
+      addFeed('info','\u{1F6AB} DUST SKIP W#'+w.rank+' '+sym, solAmt.toFixed(4)+'\u25ce < 0.01');
+      return; // dust buy — not a real signal
+    }
+    const bundleMult=Math.min(1.5, recordBundleSignal(mint,getBundleId(w.addr))); // CAP bundle amplification
     const paperSz=Math.min(((CFG.size/100)||0.1)*bundleMult, (CFG.size/100)*3);
+    // Estimate entry price from signal data so exit logic works immediately
+    const _estEntryPrice = (solAmt > 0 && tokAmt > 0) ? (solAmt / tokAmt) : 0;
     S._posCount++;
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
-      sizeSol:paperSz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,priceTickCount:0,
+      sizeSol:paperSz,entryTime:Date.now(),entryPrice:_estEntryPrice,currentPrice:_estEntryPrice,highPrice:_estEntryPrice,priceTickCount:0,
       sig:'PAPER_'+mint.slice(0,8),conf:1.0,status:'paper'};
     S.risk.daily++;
     if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
@@ -5976,6 +6030,9 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   // ── LIVE MODE: SPEED-OPTIMIZED EXECUTION ──
   // decideFast() is SYNC (<1ms) — fires buy BEFORE slow ML runs
   if(!S.keypair||!S.pubkey){addFeed('warn','\u26d4 NO WALLET','Key required');return;}
+
+  // TOKEN QUALITY GATE: skip dust buys from alpha wallets (test/spam txs)
+  if(solAmt > 0 && solAmt < 0.01)return;
 
   // ── PHASE 1: FAST GATE (sync, <1ms) ──────────────────────────────
   // Wallet trust (O(1) lookup)
@@ -6011,7 +6068,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const _adjThresh = AGGRESSION.entryThreshold(0.52);
   if(_fastConf < _adjThresh)return;
 
-  const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
+  const bundleMult=Math.min(1.5, recordBundleSignal(mint,getBundleId(w.addr))); // CAP bundle amplification
   const regimeMult=HMM.regimeSizeMultiplier();
   const _gateMs=performance.now()-_tGate;
   if(_gateMs>2)console.warn('[PERF] Fast gate:',_gateMs.toFixed(1)+'ms');
@@ -6088,7 +6145,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
       try {
         console.log('[MCHPai] BUY via Lightning:', sym, sz.toFixed(4), 'SOL, pool='+getPoolType(mint));
         const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
-          body:buildBuyBody(mint,sz,tip),keepalive:true});
+          body:buildBuyBody(mint,sz,tip)});
         if(!r.ok){
           const errText=await r.text().catch(()=>'');
           throw new Error('lightning_'+r.status+': '+errText.slice(0,80));
@@ -6130,8 +6187,9 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 
     S._posCount++;
     const _posPool = getPoolType(mint);
+    const _estEntry = (solAmt > 0 && tokAmt > 0) ? (solAmt / tokAmt) : 0;
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
-      sizeSol:sz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,
+      sizeSol:sz,entryTime:Date.now(),entryPrice:_estEntry,currentPrice:_estEntry,highPrice:_estEntry,
       priceTickCount:0,sig,conf:_fastConf,status:'pending',_pool:_posPool,_boughtVia,
       bundleConv:bundleMult,_alphaSold:false,_mctsSelling:false,_lastRugProb:0.15,_lastPumpScore:0.65,_lastSgdProb:0.5,_lastWalletScore:_wtScore,_lastNtmScore:0.5};
     S.risk.daily++;
@@ -6160,12 +6218,15 @@ async function doSell(mint,reason){
   const pnlPct=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
   const pnlSOL=pos.sizeSol*(pnlPct/100);
   const holdSecs=(Date.now()-pos.entryTime)/1000;
+  // Track losing mints globally — block re-entry for 1 hour
+  if(pnlPct <= 0) _recentLossMints.add(mint);
 
   // \u2500\u2500 PAPER CLOSE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   // FIX: Use pos.status ONLY — live positions MUST close on-chain
   // regardless of current S.paper toggle state
   if(pos.status==='paper'){
     const isWin=pnlPct>0;
+    if(!isWin)_recentLossMints.add(mint); // don't re-enter losing tokens
     if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
     S.totalPnl+=pnlSOL;
     const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6326,8 +6387,9 @@ async function doSell(mint,reason){
         }catch(err3){
           console.error('[MCHPai] ALL 3 SELL PATHS FAILED:',err3.message);
           S.positions[mint]=pos;S._posCount++;
-          toast('\u274c SELL FAILED x3: '+pos.sym,'warn');
-          addFeed('warn','\u274c SELL FAILED x3: '+pos.sym,'Local\u2192Lightning\u2192Jupiter all failed. Manual sell required.');
+          _sellRetryQueue.set(mint,{pos,reason,attempts:0,nextRetryAt:Date.now()+15000});
+          toast('\u274c SELL FAILED x3: '+pos.sym+' — auto-retrying','warn');
+          addFeed('warn','\u274c SELL FAILED x3: '+pos.sym,'Queued for auto-retry every 15s');
         }
       }
     }else{
@@ -6351,8 +6413,9 @@ async function doSell(mint,reason){
         WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);
       }catch(errJ){
         S.positions[mint]=pos;S._posCount++;
-        toast('\u274c Sell failed: '+err.message.slice(0,60),'warn');
-        addFeed('warn','\u274c SELL FAILED: '+pos.sym,err.message.slice(0,80));
+        _sellRetryQueue.set(mint,{pos,reason,attempts:0,nextRetryAt:Date.now()+15000});
+        toast('\u274c Sell failed: '+errJ.message.slice(0,60)+' — auto-retrying','warn');
+        addFeed('warn','\u274c SELL FAILED: '+pos.sym,'Queued for auto-retry every 15s');
       }
     }
   }
@@ -6485,9 +6548,9 @@ function posMonitor(){
       queueMicrotask(()=>doSell(mint,'honeypot_no_route'));
       continue;
     }
-    // Stale position cleanup: no price ticks for 5 minutes → likely dead token
-    if(pos.priceTickCount===0 && (now-pos.entryTime)>300000){
-      addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 5min — auto-closing');
+    // Stale position cleanup: no price ticks for 90s → likely dead token (was 5min — too slow for memecoins)
+    if(pos.priceTickCount===0 && (now-pos.entryTime)>90000){
+      addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 90s — auto-closing');
       queueMicrotask(()=>doSell(mint,'stale_no_ticks'));
       continue;
     }
@@ -6964,7 +7027,7 @@ async function testTrade(){
   _l('📋','GMGN gating = '+(CFG.requireGmgn!==false?'✅ ON — unranked wallets blocked':'❌ OFF — all wallets can trade'));
   const _rankedCount = WALLETS.filter(w=>w.gmgnUpdated>0).length;
   _l('📋','GMGN ranked: '+_rankedCount+'/'+WALLETS.length+' wallets'+ (_rankedCount===0?' ❌ NONE RANKED — bot will block all trades until GMGN runs':' ✅'));
-  _l('📋','Confidence threshold: 0.52 base (AGGRESSION-adjusted: '+AGGRESSION.entryThreshold(0.52).toFixed(3)+')');
+  _l('📋','Confidence threshold: LIVE=0.52 (AGGRESSION: '+AGGRESSION.entryThreshold(0.52).toFixed(3)+') | PAPER=0.32 | GMGN gate: data-conditional | Dust: <0.01 SOL');
   _l('📋','HMM regime = '+HMM.currentRegime().name+' conf='+HMM.currentRegime().conf.toFixed(2));
   _l('📋','WS connected = '+(S.ws?.readyState===1?'✅ YES':'❌ NO'));
   _l('📋','POOL_STATE cache = '+POOL_STATE.size+' tokens tracked');
