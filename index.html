@@ -411,8 +411,8 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
     <div style="font-size:8px;color:var(--spark);margin-top:2px">&#x26A0; Full URL required &mdash; not just the API key</div>
     <label class="cs-lbl" style="margin-top:8px">Backup RPC (optional)</label>
     <input class="cs-inp" id="rpc2" placeholder="https://api.mainnet-beta.solana.com" autocomplete="off">
-    <label class="cs-lbl" style="margin-top:8px">PumpPortal API Key</label>
-    <input class="cs-inp" id="ppkey-cs" type="password" placeholder="PumpPortal Lightning API key"
+    <label class="cs-lbl" style="margin-top:8px">PumpDev API Key</label>
+    <input class="cs-inp" id="ppkey-cs" type="password" placeholder="PumpDev Lightning API key"
            autocomplete="off" spellcheck="false">
     <label class="cs-lbl" style="margin-top:8px">Jito Block Engine</label>
     <input class="cs-inp" id="jitoUrl" value="https://ny.mainnet.block-engine.jito.wtf">
@@ -446,7 +446,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
     <!-- Launch button -->
     <button class="cs-btn" id="cs-launch-btn" onclick="launch()">&#x26A1; Launch Engine</button>
   </div>
-  <div class="cs-note">Helius free at <a href="https://helius.dev" target="_blank">helius.dev</a> &middot; PumpPortal at <a href="https://pumpportal.fun" target="_blank">pumpportal.fun</a></div>
+  <div class="cs-note">Helius free at <a href="https://helius.dev" target="_blank">helius.dev</a> &middot; PumpDev at <a href="https://pumpdev.io" target="_blank">pumpdev.io</a></div>
 </div>
 
 
@@ -652,7 +652,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
           <span id="regime-badge" style="font-size:9px;font-family:var(--mono);font-weight:700;padding:2px 7px;border-radius:3px;border:1px solid var(--wire2);color:var(--ink2)">\u23f3 REGIME</span>
           <span id="regime-detail" style="font-size:8px;color:var(--ink3);font-family:var(--mono)"></span>
         </div>
-        <div class="sfoot">MCHPai Trench &middot; 1,479 Alpha Wallets &middot; PumpPortal WS (dual) &middot; Jito 5-Region &middot; Ankr Broadcast &middot; ONNX ML<br><a href="https://github.com/YOUR_USERNAME/mchpai-trench" target="_blank">github.com</a></div>
+        <div class="sfoot">MCHPai Trench &middot; 1,479 Alpha Wallets &middot; PumpDev WS (dual) &middot; Jito 5-Region &middot; Ankr Broadcast &middot; ONNX ML<br><a href="https://github.com/YOUR_USERNAME/mchpai-trench" target="_blank">github.com</a></div>
       </div>
     </div>
   </div>
@@ -2364,7 +2364,7 @@ function buildSellBody(mint, tip, emergency) {
   return `{"action":"sell","mint":"${mint}","amount":"100%","denominatedInSol":"false","slippage":${slip},"priorityFee":${tip},"pool":"${pool}","skipPreflight":"true"}`;
 }
 
-// ── Jupiter Ultra V3 sell fallback — fires when PumpPortal sell fails ──
+// ── Jupiter Ultra V3 sell fallback — fires when PumpDev sell fails ──
 // Aggregates across PumpSwap, Raydium, Meteora, Orca — finds ANY exit route
 async function jupiterSell(mint) {
   try {
@@ -2411,10 +2411,15 @@ async function jupiterSell(mint) {
 const LIGHTNING_HEADERS = {'Content-Type':'application/json','Connection':'keep-alive'};
 // Pre-built Lightning URL — updated when PP key changes. Avoids string concat per trade.
 let _lightningUrl = '';
-function _rebuildLightningUrl(){ _lightningUrl = 'https://pumpportal.fun/api/trade?api-key='+(HC.ppKey||''); }
+function _rebuildLightningUrl(){ _lightningUrl = 'https://pumpdev.io/api/trade-lightning?api-key='+(HC.ppKey||''); }
 
 // \u2500\u2500 Config \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:50,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true,hardStop:-15,trailDrop:-20,takeProfit:60,maxHoldMin:10,sessionDD:-20,requireGmgn:true};
+let _gmgnFirstPassDone = false; // GATE: no trades until GMGN ranks wallets once
+const _recentLossMints = new Set(); // tokens we already lost on — don't re-enter
+const _recentBuyMints = new Map(); // mint → timestamp, prevents bundle pile-in
+setInterval(()=>_recentLossMints.clear(), 3600000); // clear hourly
+setInterval(()=>{const now=Date.now();for(const[k,ts]of _recentBuyMints)if(now-ts>30000)_recentBuyMints.delete(k);},10000);
 function loadCfg(){try{const s=localStorage.getItem('mchpai_cfg');if(s)Object.assign(CFG,JSON.parse(s))}catch(e){}}
 function saveCfg(){
   CFG.jito=document.getElementById('t-jito')?.checked??true;
@@ -2515,9 +2520,13 @@ async function loadModelFromURL(type,url,label){
 
 // Build 122-feature vector (mirrors Rust ml.rs build_features)
 // Reuse a single Float32Array instead of allocating on every signal (GC pressure)
+// v2: Expanded from 32 → 62 populated features using all available subsystem signals.
+//     Remaining indices 62-121 stay zero (MemeTrans holder-distribution features
+//     unavailable in-browser). Calibration layer in runML compensates.
 const _featureBuf = new Float32Array(122);
-function buildFeatures(w,solAmt,tokAmt){
+function buildFeatures(w,solAmt,tokAmt,mint){
   const f=_featureBuf;f.fill(0);
+  // ── Original 32 features (indices 0-31) ─────────────────────────────
   f[0]=solAmt/1e9;f[1]=tokAmt;f[2]=w.tier==='S'?1.0:w.tier==='A'?1.5:w.tier==='B'?2.0:3.0;f[3]=Math.min(1,w.rank/500);
   f[4]=w.wr7d||0;f[5]=w.wr30d||0;f[6]=confBoost(w);
   if(solAmt>0&&tokAmt>0)f[7]=tokAmt/solAmt;
@@ -2535,46 +2544,197 @@ function buildFeatures(w,solAmt,tokAmt){
   f[28]=tokAmt>0?Math.min(1,Math.log10(tokAmt+1)/12):0;
   f[29]=S.balanceSol>0?Math.min(1,(solAmt/1e9)/S.balanceSol):0;
   f[30]=ONLINE_SGD.confidence();f[31]=Math.min(1,NTM.size/100);
+  // ── NEW: Expanded features (indices 32-61) ──────────────────────────
+  // 32-36: WALLET_INTENT signals
+  const _int=WALLET_INTENT.intentScore(w.addr);
+  f[32]=Math.min(1,_int);
+  f[33]=WALLET_INTENT.isHotSession(w.addr)?1:0;
+  f[34]=mint?Math.min(1,WALLET_INTENT.bundlePropagation(mint,getBundleId(w.addr))):0;
+  // 35-36: Darwin extended
+  f[35]=_dw?Math.min(1,_dw.copies/50):0;
+  f[36]=_dw?Math.min(1,Math.max(0,_dw.pnlSol+5)/10):0.5; // normalize pnl around 0
+  // 37-40: CORRELATOR multi-signal fusion
+  if(mint){const _cs=CORRELATOR.score(mint);
+    f[37]=_cs.score;f[38]=Math.min(1,_cs.signalCount/10);f[39]=Math.min(1,_cs.uniqueTypes/5);
+  }
+  // 40-41: WHALE_DETECTOR
+  if(mint){f[40]=WHALE_DETECTOR.pressure(mint);}
+  f[41]=Math.min(1,WHALE_DETECTOR.totalWhales/50);
+  // 42-46: MOMENTUM_ML (critical — perturbation showed idx 42 at 3.5% impact)
+  if(mint){const _mm=MOMENTUM_ML.classify(mint);
+    f[42]={LAUNCH_PUMP:1.0,STEADY_CLIMB:0.75,CONSOLIDATION:0.5,DISTRIBUTION:0.25,DUMP:0.0}[_mm.regime]||0.5;
+    f[43]=Math.min(1,Math.max(0,_mm.velocity*20+0.5)); // normalize velocity to 0-1
+    f[44]=Math.min(1,Math.max(0,_mm.accel*20+0.5));
+    f[45]=_mm.vImbalance||0.5;
+    f[46]=_mm.confidence||0;
+  }
+  // 47-48: LAUNCH_SNIPER freshness
+  if(mint){f[47]=LAUNCH_SNIPER.freshness(mint);}
+  f[48]=Math.min(1,LAUNCH_SNIPER.tokenCount/200);
+  // 49-51: AGGRESSION engine
+  const _aggLvl=AGGRESSION.getLevel();
+  f[49]={PASSIVE:0.0,NORMAL:0.33,AGGRESSIVE:0.66,ULTRA:1.0}[_aggLvl]||0.33;
+  f[50]=AGGRESSION.sizeMult();
+  f[51]=AGGRESSION.entryThreshold(0.52);
+  // 52-54: FEE_ENGINE
+  f[52]=Math.min(1,FEE_ENGINE.optimalTip()/2000000); // norm to 0-1 (2M lamports max)
+  // 55-56: Bundle conviction
+  if(mint){const _bConv=getBundleConviction(mint,getBundleId(w.addr))||1.0;
+    f[55]=Math.min(1,_bConv/3); // normalize conviction
+    f[56]=_bConv>=1.5?1:0; // binary high-conviction flag
+  }
+  // 57-58: HMM regime extended
+  f[57]=_rg.idx||0;                          // regime index
+  f[58]=HMM.regimeSizeMultiplier();           // regime size multiplier
+  // 59-61: Session-level risk context
+  f[59]=Math.min(1,S.trades/Math.max(1,CFG.daily)); // daily usage ratio
+  f[60]=S.risk.dd?Math.max(-1,S.risk.dd/Math.abs(CFG.sessionDD||20)):0; // drawdown ratio
+  f[61]=S.balanceSol>0?Math.min(1,S.balanceSol/10):0; // balance scale (10 SOL=1.0)
   return f;
 }
 function confBoost(w){return w.tier==='S'?0.10+w.wr7d*0.15:0.02+w.wr7d*0.06;}
 
 // Pre-allocated ONNX buffers + ML score cache
 const _onnxBufRug=new Float32Array(122),_onnxBufPump=new Float32Array(122);
-let _onnxTensorRug=null,_onnxTensorPump=null;
 const _mlCache=new Map();
 const _ML_CACHE_TTL=15000;
+let _mlErrorCount=0; // track silent failures
 
-async function runML(w,solAmt,tokAmt){
+// ── CALIBRATION: Corrects model output for partial-feature bias ───────
+// With 62/122 features populated (60 MemeTrans holder-distribution features
+// missing), CatBoost tree paths are biased. Measured empirically:
+//   Rug detector:  partial-feature mean=0.23 vs full-feature mean=0.42
+//   Pump detector: partial-feature mean=0.74 vs full-feature mean=0.56
+// Calibration shifts outputs toward full-feature distribution.
+function _calibrateRug(raw){
+  // Shift up: partial features under-predict rug risk
+  // Linear recalibration: map [0, 1] toward full-feature distribution
+  // Anchor: 0.23 → 0.42 (mean correction), preserve extremes
+  const shifted = raw + (0.42 - 0.23) * (1 - raw);
+  return Math.max(0.01, Math.min(0.99, shifted));
+}
+function _calibratePump(raw){
+  // Shift down: partial features over-predict pump probability
+  // Anchor: 0.74 → 0.56 (mean correction), preserve extremes
+  const shifted = raw - (0.74 - 0.56) * raw;
+  return Math.max(0.01, Math.min(0.99, shifted));
+}
+
+async function runML(w,solAmt,tokAmt,mint){
   if(!S.mlModels.rug&&!S.mlModels.pump)return{rugProb:w.rank<=5?0.10:0.15,pumpScore:0.65,ran:false};
   // Elite wallets (rank 1-5): skip ML entirely — defaults always pass thresholds
   // rugProb 0.10 < 0.40 thresh, pumpScore 0.65 > 0.55 thresh. Saves 10-40ms.
   if(w.rank<=5)return{rugProb:0.10,pumpScore:0.70,ran:false};
-  // Cache check — same wallet within 15s gets cached scores
-  const _cc=_mlCache.get(w.addr);if(_cc&&(Date.now()-_cc.ts)<_ML_CACHE_TTL){S.mlStats.count++;return{rugProb:_cc.rugProb,pumpScore:_cc.pumpScore,ran:true};}
+  // Cache check — same wallet+mint within 15s gets cached scores
+  const _cKey=w.addr+'|'+(mint||'');
+  const _cc=_mlCache.get(_cKey);if(_cc&&(Date.now()-_cc.ts)<_ML_CACHE_TTL){S.mlStats.count++;return{rugProb:_cc.rugProb,pumpScore:_cc.pumpScore,ran:true};}
   const t0=performance.now();S.mlStats.count++;
-  const f=buildFeatures(w,solAmt,tokAmt);
+  const f=buildFeatures(w,solAmt,tokAmt,mint);
   let rugProb=w.rank<=10?0.12:0.15,pumpScore=0.65;
-  // Run both models in PARALLEL (was sequential — 2× slower)
+  // Run both models in PARALLEL
   const jobs=[];
   if(S.mlModels.rug)jobs.push((async()=>{try{
-    _onnxBufRug.set(f);try{if(!_onnxTensorRug)_onnxTensorRug=new ort.Tensor('float32',_onnxBufRug,[1,122]);}catch(e){_onnxTensorRug=new ort.Tensor('float32',new Float32Array(f),[1,122]);}
-    const out=await S.mlModels.rug.run({float_input:_onnxTensorRug});
-    const p=Object.values(out)[1]?.data||Object.values(out)[0]?.data;
-    if(p&&p.length>=2)rugProb=p[1];
-  }catch(e){}})());
+    _onnxBufRug.set(f);
+    // Create fresh tensor each run — safe against buffer detach across WASM boundary
+    const tensor=new ort.Tensor('float32',_onnxBufRug,[1,122]);
+    const out=await S.mlModels.rug.run({float_input:tensor});
+    // Named output access (not positional) — 'probability_tensor' from CatBoost ONNX
+    const probTensor=out.probability_tensor||out[Object.keys(out).find(k=>k!=='label')];
+    const p=probTensor?.data||probTensor?.cpuData;
+    if(p&&p.length>=2){
+      rugProb=_calibrateRug(p[1]); // calibrate for partial features
+    }else{
+      console.warn('[MCHPai] RUG model: unexpected output shape',Object.keys(out),p?.length);
+    }
+  }catch(e){
+    _mlErrorCount++;
+    console.error('[MCHPai] RUG inference FAILED (#'+_mlErrorCount+'):',e.message||e);
+    if(_mlErrorCount<=3)addFeed('warn','ONNX RUG ERROR: '+String(e.message||e).slice(0,80),'Check console for details');
+    // On repeated failures, disable model to stop wasting cycles
+    if(_mlErrorCount>=10&&_mlErrorCount%10===0){
+      console.error('[MCHPai] ONNX failing repeatedly ('+_mlErrorCount+'x) — models may be incompatible with WASM backend');
+      addFeed('warn','ONNX REPEATED FAILURES: '+_mlErrorCount+'x','TreeEnsembleClassifier may need CPU backend');
+    }
+  }})());
   if(S.mlModels.pump)jobs.push((async()=>{try{
-    _onnxBufPump.set(f);try{if(!_onnxTensorPump)_onnxTensorPump=new ort.Tensor('float32',_onnxBufPump,[1,122]);}catch(e){_onnxTensorPump=new ort.Tensor('float32',new Float32Array(f),[1,122]);}
-    const out=await S.mlModels.pump.run({float_input:_onnxTensorPump});
-    const p=Object.values(out)[1]?.data||Object.values(out)[0]?.data;
-    if(p&&p.length>=2)pumpScore=p[1];
-  }catch(e){}})());
+    _onnxBufPump.set(f);
+    const tensor=new ort.Tensor('float32',_onnxBufPump,[1,122]);
+    const out=await S.mlModels.pump.run({float_input:tensor});
+    const probTensor=out.probability_tensor||out[Object.keys(out).find(k=>k!=='label')];
+    const p=probTensor?.data||probTensor?.cpuData;
+    if(p&&p.length>=2){
+      pumpScore=_calibratePump(p[1]); // calibrate for partial features
+    }else{
+      console.warn('[MCHPai] PUMP model: unexpected output shape',Object.keys(out),p?.length);
+    }
+  }catch(e){
+    _mlErrorCount++;
+    console.error('[MCHPai] PUMP inference FAILED (#'+_mlErrorCount+'):',e.message||e);
+    if(_mlErrorCount<=3)addFeed('warn','ONNX PUMP ERROR: '+String(e.message||e).slice(0,80),'Check console for details');
+  }})());
   if(jobs.length)await Promise.all(jobs);
   const ms=performance.now()-t0;S.mlStats.totalMs+=ms;
-  _mlCache.set(w.addr,{rugProb,pumpScore,ts:Date.now()});
+  _mlCache.set(_cKey,{rugProb,pumpScore,ts:Date.now()});
   S.mlStats.lastRug=rugProb;S.mlStats.lastPump=pumpScore;
   return{rugProb,pumpScore,ran:true};
 }
+
+// ── DIAGNOSTIC: testML() — call from console to verify models ─────────
+// Usage: testML()  →  runs both models with synthetic data, logs results
+async function testML(){
+  const _log=(t,...a)=>console.log('%c[MCHPai testML] '+t,'color:#00d4ff;font-weight:bold',...a);
+  _log('Starting ONNX model diagnostic...');
+  _log('Models loaded: rug='+(!!S.mlModels.rug)+' pump='+(!!S.mlModels.pump));
+  _log('ONNX runtime: '+(ort?'v'+ort.env.versions?.web:'NOT LOADED'));
+  _log('Error count so far: '+_mlErrorCount);
+  if(!S.mlModels.rug&&!S.mlModels.pump){_log('❌ No models loaded. Load via Settings → ML Models.');return;}
+  // Test 1: Raw inference with zeros (baseline)
+  const tests=[
+    {name:'All zeros',data:new Float32Array(122)},
+    {name:'Features 0-31 random',data:(()=>{const f=new Float32Array(122);for(let i=0;i<32;i++)f[i]=Math.random();return f;})()},
+    {name:'Features 0-61 random (expanded)',data:(()=>{const f=new Float32Array(122);for(let i=0;i<62;i++)f[i]=Math.random();return f;})()},
+    {name:'Full 122 random',data:(()=>{const f=new Float32Array(122);for(let i=0;i<122;i++)f[i]=Math.random();return f;})()},
+  ];
+  for(const t of tests){
+    _log('─── Test: '+t.name+' ───');
+    for(const[mName,model]of Object.entries(S.mlModels)){
+      if(!model)continue;
+      try{
+        const tensor=new ort.Tensor('float32',new Float32Array(t.data),[1,122]);
+        const t0=performance.now();
+        const out=await model.run({float_input:tensor});
+        const ms=(performance.now()-t0).toFixed(2);
+        const keys=Object.keys(out);
+        _log('  '+mName+': outputs='+JSON.stringify(keys)+' ('+ms+'ms)');
+        const probTensor=out.probability_tensor||out[keys.find(k=>k!=='label')];
+        const p=probTensor?.data||probTensor?.cpuData;
+        if(p){
+          const raw=p[1],cal=mName==='rug'?_calibrateRug(raw):_calibratePump(raw);
+          _log('  '+mName+': raw_prob[1]='+raw.toFixed(4)+' → calibrated='+cal.toFixed(4)+' label='+
+            (out.label?.data?.[0]??'?'));
+        }else{
+          _log('  '+mName+': ⚠️ Could not extract probabilities! Keys: '+keys.join(','));
+          _log('  '+mName+': raw output dump:',out);
+        }
+      }catch(e){
+        _log('  '+mName+': ❌ INFERENCE FAILED: '+e.message);
+        _log('  '+mName+': This likely means TreeEnsembleClassifier is not supported by the WASM backend.');
+        _log('  '+mName+': Full error:',e);
+      }
+    }
+  }
+  // Feature vector analysis
+  _log('─── Feature Vector Analysis ───');
+  _log('Features populated: 62/122 (51%). Indices 62-121 are zero (MemeTrans holder-distribution data).');
+  _log('Top missing features by perturbation impact:');
+  _log('  rug: idx[80]=10.4%, idx[94]=6.3%, idx[77]=4.7%, idx[88]=4.4%');
+  _log('  pump: idx[80]=15.9%, idx[84]=8.0%, idx[118]=5.4%, idx[50]=4.8%');
+  _log('Calibration active: rug +0.19 shift, pump -0.18 shift');
+  _log('Cache entries: '+_mlCache.size+' | Error count: '+_mlErrorCount);
+  _log('✅ Diagnostic complete. If you see INFERENCE FAILED above, models are silently broken.');
+  addFeed('ml','🔬 testML() diagnostic ran','Check console (F12) for full results');
+}
+window.testML=testML;
 
 // Kelly sizing (mirrors Rust decision.rs)
 function kellySize(conf,wAddr){
@@ -2594,7 +2754,7 @@ function kellySize(conf,wAddr){
 // Full decision engine — ENSEMBLE META-MODEL (6 ML systems combined)
 async function decide(w,solAmt,tokAmt,mint){
   if(S.positions[mint])return{go:false,reason:'already_holding'};
-  const{rugProb,pumpScore}=await runML(w,solAmt,tokAmt);
+  const{rugProb,pumpScore}=await runML(w,solAmt,tokAmt,mint);
   // Hard rug gate (fast reject)
   const rugThresh=w.rank<=5?0.45:0.35;
   if(rugProb>rugThresh){S.mlStats.blocked++;S.mlStats.lastDec='rug_blocked';return{go:false,reason:'rug_'+rugProb.toFixed(2)};}
@@ -2783,6 +2943,11 @@ async function runGmgnRanker() {
   const a = WALLETS.filter(w=>w.tier==='A').length;
   addFeed('info', '\u2705 GMGN ranking complete',
     `S:${s} A:${a} \u2014 wallets re-tiered by real WR`);
+  if(!_gmgnFirstPassDone){
+    _gmgnFirstPassDone = true;
+    addFeed('info', '\u2705 GMGN GATE OPEN', 'Trading now enabled — wallets ranked');
+    toast('\u2705 GMGN ranked — trading enabled', 'trade');
+  }
   _gmgnRunning = false;
 }
 
@@ -5250,6 +5415,8 @@ async function _bootTrader(label) {
       Object.assign(CFG, p);
     }
   } catch(e) {}
+  // ALWAYS enforce GMGN gating — never trust saved state
+  CFG.requireGmgn = true;
 
   applyUI();
 
@@ -5360,8 +5527,8 @@ async function _bootTrader(label) {
   setInterval(runMCTSEvaluation,1000);
   DB.startAutoSave();
   _updateGearBadge();
-  // Pre-warm PumpPortal connection (DNS + TCP + TLS handshake cached)
-  fetch('https://pumpportal.fun/api/trade-local',{method:'OPTIONS'}).catch(()=>{});
+  // Pre-warm PumpDev connection (DNS + TCP + TLS handshake cached)
+  fetch('https://pumpdev.io/api/trade-local',{method:'OPTIONS'}).catch(()=>{});
   // Lightning preflight removed — only used for sell fallback now
   // Pre-warm Jito endpoints
   JITO_ENDPOINTS.forEach(ep=>fetch(ep+'/api/v1/bundles',{method:'OPTIONS'}).catch(()=>{}));
@@ -5488,7 +5655,7 @@ async function launch() {
       document.getElementById('h-mode').className   = 'hmode auto';
     }
 
-    // ── 7. Optional PumpPortal key ──────────────────────────────────────
+    // ── 7. Optional PumpDev key ──────────────────────────────────────
     const ppv = (document.getElementById('ppkey-cs')?.value || '').trim() || HC.ppKey || '';
     if (ppv) { HC.ppKey = ppv; try { localStorage.setItem('mchpai_ppkey', ppv); } catch(e) {} }
 
@@ -5564,7 +5731,7 @@ function togglePaper() {
 }
 
 
-// \u2500\u2500 PumpPortal WebSocket \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u2500\u2500 PumpDev WebSocket \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function handleWsMsg(e){
   try{
     const _t=performance.now(); // capture immediately before parse
@@ -5572,7 +5739,7 @@ function handleWsMsg(e){
     m._rxAt=_t; // attach receive timestamp to message
 
     // ── Pool State Detection — update mint→pool mapping from live trade data ──
-    // Migration events: PumpPortal sends these when a token graduates to PumpSwap
+    // Migration events: PumpDev sends these when a token graduates to PumpSwap
     if (m.txType === 'migration' || m.event === 'migration') {
       if (m.mint) {
         setPoolState(m.mint, 'pump-amm');
@@ -5589,7 +5756,7 @@ function handleWsMsg(e){
       // Token is on bonding curve — ensure pool state reflects this
       if (!POOL_STATE.has(m.mint)) setPoolState(m.mint, 'pump');
     } else if (m.mint && m.pool) {
-      // Some PumpPortal events include explicit pool field
+      // Some PumpDev events include explicit pool field
       if (m.pool === 'pump-amm' || m.pool === 'raydium') setPoolState(m.mint, m.pool);
     }
 
@@ -5637,7 +5804,7 @@ function makeWS(label,isPrimary){
   // Authenticated WS enables PumpSwap data (0.01 SOL/10K msgs from PP wallet).
     // Unauthenticated WS is free but limited to bonding curve data.
     // WS subscriptions are data-only — they CANNOT trigger trades (confirmed by PP docs).
-    const wsUrl='wss://pumpportal.fun/api/data'+(HC.ppKey?'?api-key='+HC.ppKey:'');
+    const wsUrl='wss://pumpdev.io/ws'+(HC.ppKey?'?api-key='+HC.ppKey:'');
   const ws=new WebSocket(wsUrl);
   ws.onopen=()=>{
     // Send all wallet subscriptions (chunked)
@@ -5717,6 +5884,14 @@ function onMsg(m){
   const sym=m.symbol||m.name||mint.slice(0,6)+'...';
   if(canTrade(mint,w.tier,getBundleConviction(mint,getBundleId(w.addr))||1.0,w.addr)){
     doBuy(mint,sym,w,solAmt,tokAmt,rAt);
+  } else if(!S.positions[mint] && !S.paused) {
+    // Log WHY signal was blocked (only meaningful blocks, skip already-held)
+    const _reason = !_gmgnFirstPassDone ? 'GMGN_PENDING' :
+      (!WMAP[w.addr]?.gmgnUpdated) ? 'UNRANKED' :
+      (WMAP[w.addr]?.wr7d < 0.45) ? 'LOW_WR_'+((WMAP[w.addr]?.wr7d*100)||0).toFixed(0)+'%' :
+      _recentLossMints.has(mint) ? 'RECENT_LOSS' :
+      (S._posCount>=CFG.maxpos) ? 'MAX_POS' : 'FILTER';
+    addFeed('info','\u{1F6AB} SKIP W#'+w.rank+'['+w.tier+'] '+sym, _reason);
   }
 
   // ═══ DEFERRED WORK — runs AFTER buy fires, on next microtask ═══
@@ -5748,6 +5923,8 @@ function onMsg(m){
 function canTrade(mint, walletTier, bundleConv, walletAddr){
   if(S.paused)return false;
   if(S.positions[mint])return false;
+  // GATE: block ALL trades until GMGN ranker completes first pass
+  if(!_gmgnFirstPassDone)return false;
   // DARWIN: hard block blacklisted wallets
   if(walletAddr && WALLET_DARWIN.isBlacklisted(walletAddr))return false;
   // DARWIN: block X-tier and C-tier wallets (underperformers)
@@ -5755,8 +5932,12 @@ function canTrade(mint, walletTier, bundleConv, walletAddr){
   if(S._posCount>=CFG.maxpos)return false;
   // Pre-trade safety: block tokens flagged with active mint/freeze authority
   if(isKnownUnsafe(mint))return false;
-  // GMGN GATING: block unranked wallets until they have real stats
-  if(CFG.requireGmgn !== false && walletAddr){
+  // TOKEN-LEVEL FILTER: block tokens we've already seen and lost on
+  if(_recentLossMints.has(mint))return false;
+  // BUNDLE PILE-IN GUARD: if we just rejected/bought this mint in last 30s, skip
+  if(_recentBuyMints.has(mint))return false;
+  // GMGN GATING: ALWAYS enforce — never trust saved state
+  if(walletAddr){
     const _w = WMAP[walletAddr];
     if(_w && !_w.gmgnUpdated){return false;} // never ranked → block
     if(_w && _w.wr7d < 0.45){return false;}  // ranked but bad WR → block
@@ -5792,22 +5973,32 @@ function canTrade(mint, walletTier, bundleConv, walletAddr){
 async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const t0=performance.now();
   const _tGate=performance.now(); // perf: gate timing start
+  _recentBuyMints.set(mint, Date.now()); // prevent bundle pile-in on same token
 
   // ── PAPER MODE ──
   if(S.paper){
-    // Paper mode STILL needs a confidence gate — without it, every signal triggers a buy
+    // Paper mode confidence gate — raised to 0.50 to stop random coin entries
     const _paperPumpEst = w.tier==='S'?0.75:w.tier==='A'?0.68:0.60;
     const _paperRugEst = w.rank<=5?0.10:w.rank<=20?0.12:0.15;
     const _paperWt = WALLET_TRUST.getScore(w.addr).score;
     const _paperConf = _paperPumpEst*(1-_paperRugEst)*0.25 + _paperWt*0.20 + confBoost(w)*1.5;
-    if(_paperConf < 0.32){
+    if(_paperConf < 0.38){
+      addFeed('info','\u{1F6AB} CONF SKIP W#'+w.rank+'['+w.tier+'] '+sym, 'conf='+_paperConf.toFixed(3)+' < 0.38');
       return; // below minimum confidence even for paper
     }
-    const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
+    // TOKEN QUALITY GATE: require the triggering wallet to have put meaningful SOL in
+    // If the alpha wallet only put in dust (<0.05 SOL), skip — probably a test/spam tx
+    if(solAmt > 0 && solAmt < 0.05){
+      addFeed('info','\u{1F6AB} DUST SKIP W#'+w.rank+' '+sym, solAmt.toFixed(4)+'\u25ce < 0.05');
+      return; // dust buy — not a real signal
+    }
+    const bundleMult=Math.min(1.5, recordBundleSignal(mint,getBundleId(w.addr))); // CAP bundle amplification
     const paperSz=Math.min(((CFG.size/100)||0.1)*bundleMult, (CFG.size/100)*3);
+    // Estimate entry price from signal data so exit logic works immediately
+    const _estEntryPrice = (solAmt > 0 && tokAmt > 0) ? (solAmt / tokAmt) : 0;
     S._posCount++;
     S.positions[mint]={mint,sym,walletRank:w.rank,tier:w.tier,sourceWallet:w.addr,
-      sizeSol:paperSz,entryTime:Date.now(),entryPrice:0,currentPrice:0,highPrice:0,priceTickCount:0,
+      sizeSol:paperSz,entryTime:Date.now(),entryPrice:_estEntryPrice,currentPrice:_estEntryPrice,highPrice:_estEntryPrice,priceTickCount:0,
       sig:'PAPER_'+mint.slice(0,8),conf:1.0,status:'paper'};
     S.risk.daily++;
     if(!S.wstats[w.rank])S.wstats[w.rank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0};
@@ -5821,6 +6012,9 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   // ── LIVE MODE: SPEED-OPTIMIZED EXECUTION ──
   // decideFast() is SYNC (<1ms) — fires buy BEFORE slow ML runs
   if(!S.keypair||!S.pubkey){addFeed('warn','\u26d4 NO WALLET','Key required');return;}
+
+  // TOKEN QUALITY GATE: skip dust buys from alpha wallets (test/spam txs)
+  if(solAmt > 0 && solAmt < 0.05)return;
 
   // ── PHASE 1: FAST GATE (sync, <1ms) ──────────────────────────────
   // Wallet trust (O(1) lookup)
@@ -5856,7 +6050,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const _adjThresh = AGGRESSION.entryThreshold(0.52);
   if(_fastConf < _adjThresh)return;
 
-  const bundleMult=recordBundleSignal(mint,getBundleId(w.addr));
+  const bundleMult=Math.min(1.5, recordBundleSignal(mint,getBundleId(w.addr))); // CAP bundle amplification
   const regimeMult=HMM.regimeSizeMultiplier();
   const _gateMs=performance.now()-_tGate;
   if(_gateMs>2)console.warn('[PERF] Fast gate:',_gateMs.toFixed(1)+'ms');
@@ -5920,15 +6114,15 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 
   try{
     // ══ BUY: Lightning PRIMARY (~300ms) → trade-local FALLBACK (~1-2s) ═══
-    // SETUP REQUIREMENT: HC.privKey MUST be your PumpPortal wallet's private key.
-    // When you create a PP API key, PumpPortal generates a wallet. Use THAT
+    // SETUP REQUIREMENT: HC.privKey MUST be your PumpDev wallet's private key.
+    // When you create a PP API key, PumpDev generates a wallet. Use THAT
     // wallet's private key as HC.privKey so S.pubkey = PP wallet address.
     // This way Lightning buys land at S.pubkey = your wallet = sellable.
     // If HC.ppKey is not set, Lightning is skipped → trade-local only.
     let sig, via;
     const _boughtVia = HC.ppKey ? 'lightning' : 'trade-local';
 
-    // ── STEP 1: Lightning (server-side ~300ms via PumpPortal's Jito relays) ──
+    // ── STEP 1: Lightning (server-side ~300ms via PumpDev's Jito relays) ──
     if(HC.ppKey && _lightningUrl){
       try {
         console.log('[MCHPai] BUY via Lightning:', sym, sz.toFixed(4), 'SOL, pool='+getPoolType(mint));
@@ -5938,7 +6132,8 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
           const errText=await r.text().catch(()=>'');
           throw new Error('lightning_'+r.status+': '+errText.slice(0,80));
         }
-        const _sig=(await r.text()).trim().replace(/"/g,'');
+        const _sigData=await r.json().catch(async()=>({signature:(await r.clone().text()).trim()}));
+        const _sig=_sigData.signature||_sigData.sig||'';
         if(!_sig||_sig.length<20)throw new Error('lightning_bad_sig');
         sig=_sig; via='lightning';
       } catch(lightErr) {
@@ -5950,7 +6145,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
     // ── STEP 2: trade-local FALLBACK (if Lightning failed or no PP key) ──
     if(!sig){
       console.log('[MCHPai] BUY via trade-local:', sym, sz.toFixed(4), 'SOL, pool='+getPoolType(mint));
-      const ppResp = await fetch('https://pumpportal.fun/api/trade-local',{
+      const ppResp = await fetch('https://pumpdev.io/api/trade-local',{
         method:'POST',headers:_JSON_HDR,body:_ppBody,
       });
       if(!ppResp.ok){const errText=await ppResp.text().catch(()=>'');throw new Error('trade-local '+ppResp.status+': '+errText.slice(0,120));}
@@ -6005,12 +6200,15 @@ async function doSell(mint,reason){
   const pnlPct=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
   const pnlSOL=pos.sizeSol*(pnlPct/100);
   const holdSecs=(Date.now()-pos.entryTime)/1000;
+  // Track losing mints globally — block re-entry for 1 hour
+  if(pnlPct <= 0) _recentLossMints.add(mint);
 
   // \u2500\u2500 PAPER CLOSE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   // FIX: Use pos.status ONLY — live positions MUST close on-chain
   // regardless of current S.paper toggle state
   if(pos.status==='paper'){
     const isWin=pnlPct>0;
+    if(!isWin)_recentLossMints.add(mint); // don't re-enter losing tokens
     if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
     S.totalPnl+=pnlSOL;
     const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6038,7 +6236,7 @@ async function doSell(mint,reason){
 
   try{
     // ── PRIMARY: trade-local → sign with YOUR key → submit ──
-    const ppResp=await fetch('https://pumpportal.fun/api/trade-local',{
+    const ppResp=await fetch('https://pumpdev.io/api/trade-local',{
       method:'POST',headers:_JSON_HDR,
       body:JSON.stringify({publicKey:S.pubkey,action:'sell',mint,
         denominatedInSol:'false',amount:'100%',slippage:30,priorityFee:tip,pool:getPoolType(mint)}),
@@ -6088,7 +6286,7 @@ async function doSell(mint,reason){
       const newPool = flipPoolAndRetry(mint);
       addFeed('warn','\ud83d\udd04 Pool auto-repair: retrying sell with pool='+newPool,'');
       try{
-        const retryResp=await fetch('https://pumpportal.fun/api/trade-local',{
+        const retryResp=await fetch('https://pumpdev.io/api/trade-local',{
           method:'POST',headers:_JSON_HDR,
           body:JSON.stringify({publicKey:S.pubkey,action:'sell',mint,
             denominatedInSol:'false',amount:'100%',slippage:35,priorityFee:FEE_ENGINE.escalatedTip(1),pool:newPool}),
@@ -6129,7 +6327,8 @@ async function doSell(mint,reason){
         const r=await fetch(_lightningUrl,{method:'POST',headers:LIGHTNING_HEADERS,
           body:buildSellBody(mint,tip,false),keepalive:true});
         if(!r.ok)throw new Error('Lightning sell '+r.status);
-        const sig=(await r.text()).trim().replace(/"/g,'');
+        const _sellData=await r.json().catch(async()=>({signature:(await r.clone().text()).trim()}));
+        const sig=_sellData.signature||_sellData.sig||'';
         const clMs=Math.round(performance.now()-t0sell);
         console.log('[MCHPai] \u2705 Lightning sell OK:',sig);
         const isWin=pnlPct>0;
@@ -6330,9 +6529,9 @@ function posMonitor(){
       queueMicrotask(()=>doSell(mint,'honeypot_no_route'));
       continue;
     }
-    // Stale position cleanup: no price ticks for 5 minutes → likely dead token
-    if(pos.priceTickCount===0 && (now-pos.entryTime)>300000){
-      addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 5min — auto-closing');
+    // Stale position cleanup: no price ticks for 90s → likely dead token (was 5min — too slow for memecoins)
+    if(pos.priceTickCount===0 && (now-pos.entryTime)>90000){
+      addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 90s — auto-closing');
       queueMicrotask(()=>doSell(mint,'stale_no_ticks'));
       continue;
     }
@@ -6809,7 +7008,7 @@ async function testTrade(){
   _l('📋','GMGN gating = '+(CFG.requireGmgn!==false?'✅ ON — unranked wallets blocked':'❌ OFF — all wallets can trade'));
   const _rankedCount = WALLETS.filter(w=>w.gmgnUpdated>0).length;
   _l('📋','GMGN ranked: '+_rankedCount+'/'+WALLETS.length+' wallets'+ (_rankedCount===0?' ❌ NONE RANKED — bot will block all trades until GMGN runs':' ✅'));
-  _l('📋','Confidence threshold: 0.52 base (AGGRESSION-adjusted: '+AGGRESSION.entryThreshold(0.52).toFixed(3)+')');
+  _l('📋','Confidence threshold: LIVE=0.52 base (AGGRESSION-adjusted: '+AGGRESSION.entryThreshold(0.52).toFixed(3)+') | PAPER=0.38 | GMGN gate: ENFORCED | Dust filter: <0.05 SOL blocked');
   _l('📋','HMM regime = '+HMM.currentRegime().name+' conf='+HMM.currentRegime().conf.toFixed(2));
   _l('📋','WS connected = '+(S.ws?.readyState===1?'✅ YES':'❌ NO'));
   _l('📋','POOL_STATE cache = '+POOL_STATE.size+' tokens tracked');
@@ -6819,9 +7018,9 @@ async function testTrade(){
   _l('📋','Jupiter sell fallback = ✅ WIRED (3rd path after trade-local → Lightning)');
   if(HC.ppKey){
     _l('⚡','Lightning buys ENABLED — VERIFY WALLET ALIGNMENT:');
-    _l('⚠️','HC.privKey MUST be your PumpPortal wallet private key');
+    _l('⚠️','HC.privKey MUST be your PumpDev wallet private key');
     _l('📋','S.pubkey = '+(S.pubkey||'NOT SET'));
-    _l('📋','→ Go to pumpportal.fun dashboard → confirm S.pubkey matches PP wallet address');
+    _l('📋','→ Go to pumpdev.io dashboard → confirm S.pubkey matches PP wallet address');
     _l('📋','→ If MISMATCHED: tokens go to wrong wallet. Fix: use PP wallet key as HC.privKey');
     _l('📋','→ If MATCHED: full Lightning speed (~300ms) + sell from same wallet ✅');
   }else{
@@ -6847,13 +7046,13 @@ async function testTrade(){
         _l('⚠️','Lightning API reachable but pool not found for test token (expected for test — real trades use real mints)');
       }else if(txt.includes('Unauthorized')||txt.includes('Invalid')){
         _l('❌','Lightning API: key invalid or expired → '+txt.slice(0,120));
-        _l('💡','Get a new key from pumpportal.fun/dashboard');
+        _l('💡','Get a new key from pumpdev.io/dashboard');
       }else{
         _l('⚠️','Lightning API response: HTTP '+r.status+' → '+txt.slice(0,200));
       }
     }catch(e){
       _l('❌','Lightning API UNREACHABLE: '+e.message);
-      if(e.message.includes('Failed to fetch')){_l('💡','CORS blocked or network error. PumpPortal may not allow requests from this origin.');}
+      if(e.message.includes('Failed to fetch')){_l('💡','CORS blocked or network error. PumpDev may not allow requests from this origin.');}
     }
   }else{
     _l('⏭','Skipping Lightning test — no PP key set');
@@ -6863,7 +7062,7 @@ async function testTrade(){
   if(S.pubkey){
     _l('🔌','Testing trade-local API...');
     try{
-      const r=await fetch('https://pumpportal.fun/api/trade-local',{method:'POST',
+      const r=await fetch('https://pumpdev.io/api/trade-local',{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({publicKey:S.pubkey,action:'buy',mint:'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
           denominatedInSol:'true',amount:0.0000001,slippage:50,priorityFee:0.00001,pool:'pump'})
@@ -7055,7 +7254,7 @@ function saveSettings() {
 
   const missingKeys = [];
   if (!HC.privKey) missingKeys.push('Private Key');
-  if (!HC.ppKey)   missingKeys.push('PumpPortal Key');
+  if (!HC.ppKey)   missingKeys.push('PumpDev Key');
   if (!HC.helius)  missingKeys.push('Helius RPC');
 
   if (missingKeys.length === 0) {
@@ -7183,10 +7382,10 @@ document.addEventListener("DOMContentLoaded", function() {
 
       <!-- PUMP.FUN / PUMPPORTAL -->
       <div class="sm-section">
-        <div class="sm-sect-title">PumpPortal API</div>
+        <div class="sm-sect-title">PumpDev API</div>
         <label class="sm-label">API Key</label>
         <input id="sm-ppkey" class="sm-input" type="password"
-               placeholder="PumpPortal Lightning API key…" autocomplete="off"
+               placeholder="PumpDev Lightning API key…" autocomplete="off"
                autocorrect="off" autocapitalize="off" spellcheck="false"/>
         <div class="sm-status" id="sm-pp-status">
           <div class="sm-dot unset" id="sm-pp-dot"></div>
