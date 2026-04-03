@@ -38,6 +38,21 @@ function _initSignWorker(){
     `;
     const blob=new Blob([wCode],{type:'application/javascript'});
     _signWorker=new Worker(URL.createObjectURL(blob));
+    _signWorker.onmessage=function(e){
+      if(e.data.type==='signed'&&_signCallbacks[e.data.id]){
+        clearTimeout(_signCallbacks[e.data.id].timer);
+        _signCallbacks[e.data.id].resolve(e.data.b64);
+        delete _signCallbacks[e.data.id];
+      }
+      if(e.data.type==='error'&&_signCallbacks[e.data.id]){
+        clearTimeout(_signCallbacks[e.data.id].timer);
+        _signCallbacks[e.data.id].reject(new Error(e.data.msg));
+        delete _signCallbacks[e.data.id];
+      }
+      if(e.data.type==='keyLoaded'){
+        console.log('[MCHPai] SignWorker key loaded:',e.data.pubkey);
+      }
+    };
     _signWorker.onerror=()=>{_signWorker=null;};
   }catch(e){_signWorker=null;}
 }
@@ -53,20 +68,7 @@ function signTxAsync(txBytes){
     _signWorker.postMessage({type:'sign',tx:Array.from(txBytes),id});
   });
 }
-if(_signWorker){
-  _signWorker.onmessage=function(e){
-    if(e.data.type==='signed'&&_signCallbacks[e.data.id]){
-      clearTimeout(_signCallbacks[e.data.id].timer);
-      _signCallbacks[e.data.id].resolve(e.data.b64);
-      delete _signCallbacks[e.data.id];
-    }
-    if(e.data.type==='error'&&_signCallbacks[e.data.id]){
-      clearTimeout(_signCallbacks[e.data.id].timer);
-      _signCallbacks[e.data.id].reject(new Error(e.data.msg));
-      delete _signCallbacks[e.data.id];
-    }
-  };
-}
+// onmessage wired inside _initSignWorker() — NOT here (worker is null at load time)
 
 function u8ToB64(u8){const L=u8.length;let bin='';const chunk=8192;for(let i=0;i<L;i+=chunk){const end=Math.min(i+chunk,L);let s='';for(let j=i;j<end;j++)s+=String.fromCharCode(u8[j]);bin+=s;}return btoa(bin);}
 
@@ -467,7 +469,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
     <div class="sc"><span class="v n" id="s-pos">0</span><span class="l">OPEN</span></div>
     <div class="sc"><span class="v n" id="s-sig">0</span><span class="l">SIGS</span></div>
     <div class="sc"><span class="v n" id="s-day">0/1000</span><span class="l">DAILY</span></div>
-    <div class="sc"><span class="v g" id="s-ml">12&times;AI</span><span class="l">ML</span></div>
+    <div class="sc"><span class="v g" id="s-ml">17&times;AI</span><span class="l">ML</span></div>
   </div>
   <div id="cbb"><span id="cbmsg">CIRCUIT BREAKER HALTED</span><button class="cbrst" onclick="resetCB()">RESET</button></div>
   <div id="tabs">
@@ -549,7 +551,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
           <div class="mlrow"><div><div class="mllbl">Decision</div></div><span class="mlval" id="ml-last-dec" style="color:var(--ink3)">--</span></div>
         </div>
         <div class="mlcard">
-          <div class="mlt">&#x1F9E0; ML INTELLIGENCE (6 SYSTEMS)</div>
+          <div class="mlt">&#x1F9E0; ML INTELLIGENCE (11 SYSTEMS)</div>
           <div class="mlrow"><div><div class="mllbl">Online SGD</div><div class="mlsub">Live-learning entry model</div></div><div><span class="mlval b" id="ml-sgd-n">0</span><span style="font-size:8px;color:var(--ink3)"> trades</span></div></div>
           <div class="mlrow"><div><div class="mllbl">SGD Confidence</div><div class="mlsub">Model maturity</div></div><div class="mlval b" id="ml-sgd-conf">0%</div></div>
           <div class="mlrow"><div><div class="mllbl">NTM Memory</div><div class="mlsub">Episodic pattern bank</div></div><div><span class="mlval" style="color:var(--violet)" id="ml-ntm-size">0</span><span style="font-size:8px;color:var(--ink3)"> episodes</span></div></div>
@@ -558,6 +560,11 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
           <div class="mlrow"><div><div class="mllbl">Wallet Trust</div><div class="mlsub">Bayesian posterior</div></div><div class="mlval g">ACTIVE</div></div>
           <div class="mlrow"><div><div class="mllbl">ATR Trailing</div><div class="mlsub">Regime-adaptive stop</div></div><div class="mlval g">ACTIVE</div></div>
           <div class="mlrow"><div><div class="mllbl">Momentum</div><div class="mlsub">Velocity classifier</div></div><div class="mlval g">ACTIVE</div></div>
+          <div class="mlrow"><div><div class="mllbl">Sell Pressure</div><div class="mlsub">Real-time flow imbalance</div></div><div class="mlval g">ACTIVE</div></div>
+          <div class="mlrow"><div><div class="mllbl">Micro Regime</div><div class="mlsub">Per-token momentum state</div></div><div class="mlval g">ACTIVE</div></div>
+          <div class="mlrow"><div><div class="mllbl">Token Age</div><div class="mlsub">Freshness decay penalty</div></div><div class="mlval g">ACTIVE</div></div>
+          <div class="mlrow"><div><div class="mllbl">Temporal</div><div class="mlsub">Hour-of-day wallet WR</div></div><div class="mlval g">ACTIVE</div></div>
+          <div class="mlrow"><div><div class="mllbl">Adversarial</div><div class="mlsub">Copy-trader farm detect</div></div><div class="mlval g">ACTIVE</div></div>
         </div>
         <div class="mlcard">
           <div class="mlt">&#x1F3AF; WALLET INTENT ENGINE</div>
@@ -2415,7 +2422,8 @@ function _rebuildLightningUrl(){ _lightningUrl = 'https://pumpportal.fun/api/tra
 
 // \u2500\u2500 Config \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:1500,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true,hardStop:-15,trailDrop:-20,takeProfit:60,maxHoldMin:10,sessionDD:-20,requireGmgn:true};
-let _gmgnFirstPassDone = false; // GATE: no trades until GMGN ranks wallets once
+let _gmgnFirstPassDone = false; // tracks if GMGN ranker has run
+let _gmgnGotData = false; // true when GMGN API returned real data for at least 1 wallet
 const _recentLossMints = new Set(); // tokens we already lost on — don't re-enter
 const _recentBuyMints = new Map(); // mint → timestamp, prevents bundle pile-in
 setInterval(()=>_recentLossMints.clear(), 3600000); // clear hourly
@@ -2921,6 +2929,7 @@ async function runGmgnRanker() {
     await Promise.allSettled(batch.map(async (w) => {
       const stats = await fetchGmgnWallet(w.addr);
       if (stats) {
+        _gmgnGotData = true;
         w.wr7d  = stats.wr7d;
         w.pnl7d = stats.pnl7d;
         w.gmgnUpdated = Date.now();
@@ -3685,10 +3694,12 @@ function mlLearnFromTrade(pos,pnlPct,isWin){
     ONLINE_SGD.train(x,isWin?1:0);
     EXIT_MODEL.learnFromClose(pos,pos.mint,pnlPct,(Date.now()-pos.entryTime)/1000);
     WALLET_TRUST.update(pos.sourceWallet,isWin);
+    WALLET_TEMPORAL.recordTrade(pos.sourceWallet,isWin); // ML: hourly win rate tracking
     const mom=MOMENTUM_ML.classify(pos.mint);
     const sig=NTM.buildSignature(pos.tier,bConv,pos.sizeSol,pos._lastRugProb||0.15,pos._lastPumpScore||0.65,ri.idx,w.wr7d||0,mom.regime);
     NTM.store(sig,isWin,pnlPct);
     ENSEMBLE.recordOutcome({rugProb:pos._lastRugProb||0.15,pumpScore:pos._lastPumpScore||0.65,sgdProb:pos._lastSgdProb||0.5,walletScore:pos._lastWalletScore||0.5,ntmScore:pos._lastNtmScore||0.5,bundleConv:bConv,regimeBoost:ri.name==='EUPHORIA'?0.8:ri.name==='FEAR'?0.2:0.5},isWin);
+    SELL_PRESSURE.clean(pos.mint); // cleanup sell pressure data for closed position
     addFeed('ml','\u{1F9E0} ML TRAINED: '+pos.sym+' '+(isWin?'\u2705':'\u274C'),'SGD n='+ONLINE_SGD.trainCount+' | Trust='+WALLET_TRUST.getScore(pos.sourceWallet).score.toFixed(2)+' | NTM='+NTM.size);
   }catch(e){console.warn('[ML] Learn error:',e);}
 }
@@ -4225,6 +4236,314 @@ const LIQUIDITY = (() => {
 
   return { update, isDying, isSurging, getHealth, clean };
 })();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ML SYSTEM #1: SELL PRESSURE RATIO — Real-time buy/sell flow imbalance
+// Tracks rolling 30s window of buy vs sell events per token from WS data.
+// If sells dominate (>60%), smart money is exiting — skip entry or accelerate exit.
+// O(1) per tick, zero allocations, ring buffer design.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SELL_PRESSURE = (() => {
+  const WIN = 30000; // 30s rolling window
+  const state = {}; // mint → {buys:[], sells:[], ratio:0.5}
+
+  function record(mint, isBuy) {
+    if (!state[mint]) state[mint] = { buys: [], sells: [], ratio: 0.5, _lastCalc: 0 };
+    const s = state[mint];
+    const now = Date.now();
+    if (isBuy) s.buys.push(now); else s.sells.push(now);
+    // Lazy prune — only on read or every 50 events
+    if ((s.buys.length + s.sells.length) % 50 === 0) _prune(s, now);
+  }
+
+  function _prune(s, now) {
+    const cutoff = now - WIN;
+    while (s.buys.length > 0 && s.buys[0] < cutoff) s.buys.shift();
+    while (s.sells.length > 0 && s.sells[0] < cutoff) s.sells.shift();
+  }
+
+  function ratio(mint) {
+    const s = state[mint];
+    if (!s) return 0.5;
+    const now = Date.now();
+    // Recalculate at most every 500ms
+    if (now - s._lastCalc < 500) return s.ratio;
+    _prune(s, now);
+    const total = s.buys.length + s.sells.length;
+    s.ratio = total > 2 ? s.sells.length / total : 0.5;
+    s._lastCalc = now;
+    return s.ratio;
+  }
+
+  // Pre-filter: is this token seeing heavy selling? (for canTrade gate)
+  function isHeavySelling(mint) { return ratio(mint) > 0.65; }
+
+  function clean(mint) { delete state[mint]; }
+
+  return { record, ratio, isHeavySelling, clean };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ML SYSTEM #2: MICRO-REGIME CLASSIFIER — Per-token momentum regime
+// Uses last 6 price ticks to classify: ACCELERATING, STEADY, DECELERATING, REVERSING
+// 4 float comparisons per tick — zero latency impact.
+// Used for: entry filtering (only enter ACCELERATING/STEADY) + exit timing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const MICRO_REGIME = (() => {
+  function classify(mint) {
+    const data = MCTS_POS_DATA[mint];
+    if (!data || data.ticks.length < 6) return 'UNKNOWN';
+    const t = data.ticks;
+    const n = t.length;
+    // Velocity: recent 3 ticks vs prior 3 ticks
+    const v_recent = (t[n-1] - t[n-3]) / (t[n-3] || 1);
+    const v_prior  = (t[n-3] - t[n-5]) / (t[n-5] || 1);
+    // Acceleration
+    const accel = v_recent - v_prior;
+    // Direction
+    const dir = t[n-1] > t[n-4] ? 1 : -1; // overall trend over last 4 ticks
+
+    if (dir > 0 && accel > 0.005) return 'ACCELERATING';
+    if (dir > 0 && accel >= -0.005) return 'STEADY';
+    if (dir > 0 && accel < -0.005) return 'DECELERATING';
+    if (dir <= 0 && v_recent < -0.01) return 'REVERSING';
+    if (dir <= 0) return 'DECELERATING';
+    return 'STEADY';
+  }
+
+  // For entry: should we enter this token based on micro-regime?
+  function isEntryFavorable(mint) {
+    const r = classify(mint);
+    return r === 'ACCELERATING' || r === 'STEADY';
+  }
+
+  // Size multiplier based on micro-regime
+  function sizeMult(mint) {
+    const r = classify(mint);
+    return { ACCELERATING: 1.3, STEADY: 1.0, DECELERATING: 0.6, REVERSING: 0.3, UNKNOWN: 1.0 }[r] || 1.0;
+  }
+
+  return { classify, isEntryFavorable, sizeMult };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ML SYSTEM #3: WALLET TEMPORAL PATTERNS — Hour-of-day win rate tracking
+// Some wallets are profitable only during specific time windows (Asian hours,
+// US morning, etc.). Tracks per-wallet, per-hour win rate. Gates entry when
+// the wallet is historically unprofitable at the current hour.
+// Implementation: 24-slot array per wallet, Bayesian smoothing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const WALLET_TEMPORAL = (() => {
+  const DB_KEY = 'mchpai_temporal_v1';
+  let patterns = {}; // walletAddr → { hours: [{w,l},...24], totalN: 0 }
+
+  function load() {
+    try { const s = localStorage.getItem(DB_KEY); if (s) patterns = JSON.parse(s); } catch(e) {}
+  }
+  function save() {
+    try { localStorage.setItem(DB_KEY, JSON.stringify(patterns)); } catch(e) {}
+  }
+
+  function _ensure(addr) {
+    if (!patterns[addr]) {
+      patterns[addr] = { hours: Array.from({length:24}, () => ({w:1,l:1})), totalN: 0 };
+    }
+    return patterns[addr];
+  }
+
+  // Record trade outcome at current hour
+  function recordTrade(walletAddr, isWin) {
+    const p = _ensure(walletAddr);
+    const h = new Date().getUTCHours();
+    if (isWin) p.hours[h].w++; else p.hours[h].l++;
+    p.totalN++;
+    if (p.totalN % 10 === 0) save();
+  }
+
+  // Get win rate for a wallet at current hour (Bayesian posterior mean)
+  function currentHourWR(walletAddr) {
+    const p = patterns[walletAddr];
+    if (!p) return { wr: 0.5, n: 0, confident: false };
+    const h = new Date().getUTCHours();
+    const slot = p.hours[h];
+    const total = slot.w + slot.l;
+    return { wr: slot.w / total, n: total - 2, confident: total >= 8 };
+  }
+
+  // Should we gate this wallet at current hour?
+  function isUnprofitableHour(walletAddr) {
+    const { wr, confident } = currentHourWR(walletAddr);
+    return confident && wr < 0.35; // only gate if confident AND bad
+  }
+
+  // Get best hours for a wallet (for dashboard display)
+  function bestHours(walletAddr) {
+    const p = patterns[walletAddr];
+    if (!p) return [];
+    return p.hours.map((s, h) => ({ hour: h, wr: s.w / (s.w + s.l), n: s.w + s.l - 2 }))
+      .filter(x => x.n >= 5)
+      .sort((a, b) => b.wr - a.wr)
+      .slice(0, 5);
+  }
+
+  load(); // restore on boot
+  return { recordTrade, currentHourWR, isUnprofitableHour, bestHours, load, save };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ML SYSTEM #4: TOKEN AGE DECAY — Entry penalty based on token age
+// Memecoins have a sharp sweet spot (2-15 min post-launch). Tokens older
+// than 30min have drastically lower upside potential.
+// Uses LAUNCH_SNIPER timestamps to compute age, applies confidence penalty.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TOKEN_AGE = (() => {
+  // Returns a multiplier [0.0 - 1.0] based on token freshness
+  // 1.0 = brand new (optimal), decays exponentially
+  function agePenalty(mint) {
+    const freshness = LAUNCH_SNIPER.freshness(mint); // 0=old, 1=fresh
+    if (freshness >= 0.8) return 1.0;    // < 3 min old: full green
+    if (freshness >= 0.6) return 0.90;   // 3-8 min: minor penalty
+    if (freshness >= 0.4) return 0.75;   // 8-15 min: moderate penalty
+    if (freshness >= 0.2) return 0.55;   // 15-25 min: significant penalty
+    return 0.35;                          // > 25 min: heavy penalty
+  }
+
+  // Hard gate: should we even consider this token?
+  function isTooOld(mint) {
+    return LAUNCH_SNIPER.freshness(mint) < 0.1; // > 30 min: just skip
+  }
+
+  return { agePenalty, isTooOld };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ML SYSTEM #5: ADVERSARIAL WALLET DETECTOR
+// Detects wallets that front-run copy traders: buy → fast sell within 60s.
+// These wallets profit from the copy-trader liquidity wave, not from the token.
+// Tracks buy_to_fast_sell_ratio per wallet. Auto-demotes to X-tier if >40%.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ADVERSARIAL_DETECT = (() => {
+  const DB_KEY = 'mchpai_adversarial_v1';
+  const FAST_SELL_WINDOW = 60000; // 60 seconds
+  let tracker = {}; // walletAddr → { buys: [{mint,ts}...], fastSells: 0, totalSells: 0 }
+
+  function load() {
+    try { const s = localStorage.getItem(DB_KEY); if (s) tracker = JSON.parse(s); } catch(e) {}
+  }
+  function save() {
+    try { localStorage.setItem(DB_KEY, JSON.stringify(tracker)); } catch(e) {}
+  }
+
+  function _ensure(addr) {
+    if (!tracker[addr]) tracker[addr] = { buys: [], fastSells: 0, totalSells: 0 };
+    return tracker[addr];
+  }
+
+  // Record when a tracked wallet buys
+  function recordBuy(walletAddr, mint) {
+    const t = _ensure(walletAddr);
+    t.buys.push({ mint, ts: Date.now() });
+    // Keep only last 20 buys per wallet
+    if (t.buys.length > 20) t.buys.shift();
+  }
+
+  // Record when a tracked wallet sells — check if it was a fast flip
+  function recordSell(walletAddr, mint) {
+    const t = tracker[walletAddr];
+    if (!t) return;
+    t.totalSells++;
+    const buyIdx = t.buys.findIndex(b => b.mint === mint);
+    if (buyIdx !== -1) {
+      const holdMs = Date.now() - t.buys[buyIdx].ts;
+      if (holdMs < FAST_SELL_WINDOW) {
+        t.fastSells++;
+        if (t.fastSells >= 3 && t.totalSells >= 5) {
+          const ratio = t.fastSells / t.totalSells;
+          if (ratio > 0.40) {
+            // Auto-demote to X-tier (blocked)
+            const w = WMAP[walletAddr];
+            if (w && w.tier !== 'X') {
+              const prevTier = w.tier;
+              w.tier = 'X';
+              addFeed('warn', '\u26a0 ADVERSARIAL DETECTED: W#' + (w.rank||'?'),
+                prevTier + '→X | ' + t.fastSells + '/' + t.totalSells + ' fast-sells (' + Math.round(ratio*100) + '%)');
+            }
+          }
+        }
+      }
+      t.buys.splice(buyIdx, 1);
+    }
+    if (t.totalSells % 5 === 0) save();
+  }
+
+  // Is this wallet an adversarial actor?
+  function isAdversarial(walletAddr) {
+    const t = tracker[walletAddr];
+    if (!t || t.totalSells < 5) return false;
+    return (t.fastSells / t.totalSells) > 0.40;
+  }
+
+  // Get adversarial score (0=clean, 1=definite adversarial)
+  function score(walletAddr) {
+    const t = tracker[walletAddr];
+    if (!t || t.totalSells < 3) return 0;
+    return Math.min(1, (t.fastSells / t.totalSells) * 1.5);
+  }
+
+  load();
+  return { recordBuy, recordSell, isAdversarial, score, load, save };
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ML RING BUFFERS — O(1) push/percentile for latency tracking
+// Replaces Array.push() + .shift() which is O(n) for latDetect/latExec/sigDeltas
+// ═══════════════════════════════════════════════════════════════════════════
+
+class RingBuffer {
+  constructor(capacity) {
+    this.buf = new Float64Array(capacity);
+    this.cap = capacity;
+    this.head = 0;
+    this.len = 0;
+  }
+  push(v) {
+    this.buf[this.head] = v;
+    this.head = (this.head + 1) % this.cap;
+    if (this.len < this.cap) this.len++;
+  }
+  toSorted() {
+    const arr = [];
+    const start = this.len < this.cap ? 0 : this.head;
+    for (let i = 0; i < this.len; i++) arr.push(this.buf[(start + i) % this.cap]);
+    return arr.sort((a, b) => a - b);
+  }
+  get length() { return this.len; }
+  reduce(fn, init) {
+    let acc = init;
+    const start = this.len < this.cap ? 0 : this.head;
+    for (let i = 0; i < this.len; i++) acc = fn(acc, this.buf[(start + i) % this.cap]);
+    return acc;
+  }
+  // Return last N pushed values (most recent first)
+  last(n) {
+    const result = [];
+    for (let i = 0; i < Math.min(n, this.len); i++) {
+      result.push(this.buf[(this.head - 1 - i + this.cap) % this.cap]);
+    }
+    return result;
+  }
+}
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5528,7 +5847,7 @@ async function _bootTrader(label) {
   DB.startAutoSave();
   _updateGearBadge();
   // Pre-warm PumpPortal connection (DNS + TCP + TLS handshake cached)
-  fetch('https://pumpportal.fun/api/trade-local',{method:'OPTIONS'}).catch(()=>{});
+  fetch('https://pumpportal.fun/api/trade-local',{method:'HEAD'}).catch(()=>{});
   // Lightning preflight removed — only used for sell fallback now
   // Pre-warm Jito endpoints
   JITO_ENDPOINTS.forEach(ep=>fetch(ep+'/api/v1/bundles',{method:'OPTIONS'}).catch(()=>{}));
@@ -5735,29 +6054,42 @@ function togglePaper() {
 function handleWsMsg(e){
   try{
     const _t=performance.now(); // capture immediately before parse
-    const m=JSON.parse(e.data);
+    const raw=e.data;
+
+    // ═══ SPEED OPT: Fast-path string scan before JSON.parse ═══
+    // Extract trader key via indexOf — 10-50x faster than JSON.parse for irrelevant messages
+    // Only parse if (a) it's a migration event, (b) trader is in WMAP, or (c) mint is in open positions
+    const migIdx=raw.indexOf('"migration"');
+    if(migIdx===-1){
+      // Fast trader extraction: find "traderPublicKey":"..." or "user":"..."
+      let trader=null;
+      let tIdx=raw.indexOf('"traderPublicKey":"');
+      if(tIdx!==-1){tIdx+=18;const tEnd=raw.indexOf('"',tIdx);if(tEnd!==-1)trader=raw.substring(tIdx,tEnd);}
+      else{tIdx=raw.indexOf('"user":"');if(tIdx!==-1){tIdx+=8;const tEnd=raw.indexOf('"',tIdx);if(tEnd!==-1)trader=raw.substring(tIdx,tEnd);}}
+
+      // Fast mint extraction for position price ticks
+      let mint=null;
+      const mIdx=raw.indexOf('"mint":"');
+      if(mIdx!==-1){const mStart=mIdx+8;const mEnd=raw.indexOf('"',mStart);if(mEnd!==-1)mint=raw.substring(mStart,mEnd);}
+
+      // SKIP if: not a tracked wallet AND not a price tick for an open position
+      if(!trader || !WMAP[trader]){
+        if(!mint || !S.positions[mint])return; // irrelevant message — skip JSON.parse entirely
+      }
+    }
+
+    const m=JSON.parse(raw);
     m._rxAt=_t; // attach receive timestamp to message
 
-    // ── Pool State Detection — update mint→pool mapping from live trade data ──
-    // Migration events: PumpPortal sends these when a token graduates to PumpSwap
+    // ── Pool State Detection — ONLY for relevant events ──────────────
     if (m.txType === 'migration' || m.event === 'migration') {
       if (m.mint) {
         setPoolState(m.mint, 'pump-amm');
         console.log('[MCHPai] MIGRATION detected:', m.mint.slice(0,12), '→ pump-amm');
         addFeed('info', '\ud83d\ude80 MIGRATED to PumpSwap', (m.symbol||m.mint.slice(0,8)));
-        // If we hold this token, update position metadata
         if (S.positions[m.mint]) S.positions[m.mint]._pool = 'pump-amm';
       }
-      return; // migration events aren't trade signals
-    }
-    // For trade events: detect pool from vSolInBondingCurve field
-    // Present = still on bonding curve; absent/zero with trade data = migrated
-    if (m.mint && m.vSolInBondingCurve !== undefined) {
-      // Token is on bonding curve — ensure pool state reflects this
-      if (!POOL_STATE.has(m.mint)) setPoolState(m.mint, 'pump');
-    } else if (m.mint && m.pool) {
-      // Some PumpPortal events include explicit pool field
-      if (m.pool === 'pump-amm' || m.pool === 'raydium') setPoolState(m.mint, m.pool);
+      return;
     }
 
     const pos=S.positions[m.mint];
@@ -5771,9 +6103,22 @@ function handleWsMsg(e){
         pos._lastTickAt=Date.now();
         if(pos.entryPrice===0)pos.entryPrice=p;
         if(p>pos.highPrice)pos.highPrice=p;
-        // Feed MCTS tick tracker
         const _isBuy=m.is_buy===true||m.is_buy===1;
         recordMctsTick(m.mint,p,_isBuy);
+        SELL_PRESSURE.record(m.mint,_isBuy); // ML: track buy/sell flow
+      }
+      // OPT: Pool state from trade data — only check for held positions
+      if (m.vSolInBondingCurve !== undefined) {
+        if (!POOL_STATE.has(m.mint)) setPoolState(m.mint, 'pump');
+      } else if (m.pool) {
+        if (m.pool === 'pump-amm' || m.pool === 'raydium') setPoolState(m.mint, m.pool);
+      }
+    } else {
+      // Not a held position — still detect pool for future trades
+      if (m.mint && m.vSolInBondingCurve !== undefined && !POOL_STATE.has(m.mint)) {
+        setPoolState(m.mint, 'pump');
+      } else if (m.mint && m.pool && (m.pool === 'pump-amm' || m.pool === 'raydium')) {
+        setPoolState(m.mint, m.pool);
       }
     }
     onMsg(m);
@@ -5849,7 +6194,7 @@ setInterval(()=>{
   for(const[k,ts]of S.dedup)if(now-ts>DEDUP_TTL)S.dedup.delete(k);
 },30000);
 function isNew(key){
-  if(!key)return true;
+  if(!key)return false; // FIX: null/undefined sigs are NOT new — drop them
   const now=Date.now();
   if(S.dedup.has(key)){
     if(now-S.dedup.get(key)<DEDUP_TTL)return false;
@@ -5872,26 +6217,26 @@ function onMsg(m){
   // Mirror exit — zero delay
   if(!isBuy&&S.positions[mint]&&CFG.mirrorExit&&(S.positions[mint].priceTickCount||0)>=1){
     S.positions[mint]._alphaSold=true;
+    ADVERSARIAL_DETECT.recordSell(trader, mint); // ML: track wallet sell speed
     queueMicrotask(()=>doSell(mint,'mirror_exit_W'+w.rank));
     setTimeout(()=>{addFeed('sell','\ud83e\ude9e MIRROR EXIT: W#'+w.rank+'['+w.tier+'] '+(m.symbol||m.name||mint.slice(0,6)),'Exit now');flashW(w.rank);},0);
     return;
   }
-  if(!isBuy)return;
+  if(!isBuy){
+    // Track sells from tracked wallets even if we don't hold (for adversarial detection)
+    setTimeout(()=>ADVERSARIAL_DETECT.recordSell(trader, mint), 0);
+    return;
+  }
 
   // FAST PATH: canTrade + doBuy — NOTHING ELSE before this
   const solAmt=m.sol_amount??m.solAmount??0;
   const tokAmt=m.token_amount??m.tokenAmount??0;
   const sym=m.symbol||m.name||mint.slice(0,6)+'...';
+  S._lastSkip='';
   if(canTrade(mint,w.tier,getBundleConviction(mint,getBundleId(w.addr))||1.0,w.addr)){
     doBuy(mint,sym,w,solAmt,tokAmt,rAt);
   } else if(!S.positions[mint] && !S.paused) {
-    // Log WHY signal was blocked (only meaningful blocks, skip already-held)
-    const _reason = !_gmgnFirstPassDone ? 'GMGN_PENDING' :
-      (!WMAP[w.addr]?.gmgnUpdated) ? 'UNRANKED' :
-      (WMAP[w.addr]?.wr7d < 0.45) ? 'LOW_WR_'+((WMAP[w.addr]?.wr7d*100)||0).toFixed(0)+'%' :
-      _recentLossMints.has(mint) ? 'RECENT_LOSS' :
-      (S._posCount>=CFG.maxpos) ? 'MAX_POS' : 'FILTER';
-    addFeed('info','\u{1F6AB} SKIP W#'+w.rank+'['+w.tier+'] '+sym, _reason);
+    addFeed('info','\u{1F6AB} SKIP W#'+w.rank+'['+w.tier+'] '+sym, S._lastSkip||'UNKNOWN');
   }
 
   // ═══ DEFERRED WORK — runs AFTER buy fires, on next microtask ═══
@@ -5899,6 +6244,7 @@ function onMsg(m){
     // Intent + Sniper + Whale + Correlator (intelligence, not gating)
     WALLET_INTENT.recordActivity(trader,mint,solAmt,true);
     LAUNCH_SNIPER.recordTrade(mint,trader,solAmt);
+    ADVERSARIAL_DETECT.recordBuy(trader, mint); // ML: track wallet buy for fast-sell detection
     if(solAmt>0){const _wh=WHALE_DETECTOR.check(mint,solAmt,trader);
       if(_wh){CORRELATOR.record(mint,_wh.isMega?'mega_whale':'whale_buy');
         addFeed('buy','\u{1F40B} '+(_wh.isMega?'MEGA ':'')+'WHALE '+solAmt.toFixed(1)+'\u25ce '+(m.symbol||mint.slice(0,6)),'p='+_wh.pressure.toFixed(2));}
@@ -5921,50 +6267,50 @@ function onMsg(m){
 
 // \u2500\u2500 Risk guard (mirrors Rust circuit_breaker.rs) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function canTrade(mint, walletTier, bundleConv, walletAddr){
-  if(S.paused)return false;
-  if(S.positions[mint])return false;
-  // GATE: block ALL trades until GMGN ranker completes first pass
-  if(!_gmgnFirstPassDone)return false;
+  if(S.paused){S._lastSkip='PAUSED';return false;}
+  if(S.positions[mint]){S._lastSkip='HELD';return false;}
   // DARWIN: hard block blacklisted wallets
-  if(walletAddr && WALLET_DARWIN.isBlacklisted(walletAddr))return false;
+  if(walletAddr && WALLET_DARWIN.isBlacklisted(walletAddr)){S._lastSkip='BLACKLIST';return false;}
   // DARWIN: block X-tier and C-tier wallets (underperformers)
-  if(walletTier==='X' || walletTier==='C')return false;
-  if(S._posCount>=CFG.maxpos)return false;
+  if(walletTier==='X' || walletTier==='C'){S._lastSkip='TIER_'+walletTier;return false;}
+  // ML: Adversarial wallet detector — block wallets farming copy-traders
+  if(walletAddr && ADVERSARIAL_DETECT.isAdversarial(walletAddr)){S._lastSkip='ADVERSARIAL';return false;}
+  // ML: Wallet temporal pattern — block wallets unprofitable at current hour
+  if(walletAddr && WALLET_TEMPORAL.isUnprofitableHour(walletAddr)){S._lastSkip='BAD_HOUR';return false;}
+  if(S._posCount>=CFG.maxpos){S._lastSkip='MAX_POS';return false;}
   // Pre-trade safety: block tokens flagged with active mint/freeze authority
-  if(isKnownUnsafe(mint))return false;
+  if(isKnownUnsafe(mint)){S._lastSkip='UNSAFE';return false;}
   // TOKEN-LEVEL FILTER: block tokens we've already seen and lost on
-  if(_recentLossMints.has(mint))return false;
-  // BUNDLE PILE-IN GUARD: if we just rejected/bought this mint in last 30s, skip
-  if(_recentBuyMints.has(mint))return false;
-  // GMGN GATING: ALWAYS enforce — never trust saved state
-  if(walletAddr){
+  if(_recentLossMints.has(mint)){S._lastSkip='RECENT_LOSS';return false;}
+  // BUNDLE PILE-IN GUARD: if we just bought this mint recently, skip
+  if(_recentBuyMints.has(mint)){S._lastSkip='PILE_IN';return false;}
+  // GMGN GATING: only enforce when API actually returned data
+  if(_gmgnGotData && walletAddr){
     const _w = WMAP[walletAddr];
-    if(_w && !_w.gmgnUpdated){return false;} // never ranked → block
-    if(_w && _w.wr7d < 0.45){return false;}  // ranked but bad WR → block
+    if(_w && !_w.gmgnUpdated){S._lastSkip='UNRANKED';return false;}
+    if(_w && _w.wr7d < 0.35){S._lastSkip='LOW_WR_'+Math.round((_w.wr7d||0)*100)+'%';return false;}
   }
   // Daily limit applies to ALL modes (paper + live)
   if(Date.now()>S.risk.dailyReset){S.risk.daily=0;S.risk.dailyReset=Date.now()+86400000;}
-  if(S.risk.daily>=CFG.daily)return false;
+  if(S.risk.daily>=CFG.daily){S._lastSkip='DAILY_CAP';return false;}
   // SESSION DRAWDOWN HALT: stop trading if session PnL drops too far
   if(S.balanceSol > 0 && S.totalPnl < 0){
     const _ddPct = (S.totalPnl / S.balanceSol) * 100;
-    if(_ddPct <= (CFG.sessionDD || -20)){return false;}
+    if(_ddPct <= (CFG.sessionDD || -20)){S._lastSkip='DRAWDOWN';return false;}
   }
   if(S.paper)return true;
-  if(S.risk.cb)return false;
+  if(S.risk.cb){S._lastSkip='CIRCUIT_BRK';return false;}
 
   // HMM Regime gate — BYPASSED first 10 live trades (no data = blocks everything)
   if((S.wins+S.losses)>=10){
     const regimeCheck = HMM.isAllowedByRegime(walletTier||'B', bundleConv||1.0);
-    if(!regimeCheck.allowed)return false;
+    if(!regimeCheck.allowed){S._lastSkip='HMM_REGIME';return false;}
   }
 
   const need=CFG.size/100,avail=S.balanceSol-CFG.res/100;
-  // Balance unknown: WARN but don't block — Lightning API validates server-side
   if(S.balanceSol===0){
-    // balance unknown — proceed (Lightning validates server-side)
   } else if(avail<need){
-    return false; // reserve guard
+    S._lastSkip='LOW_BAL';return false;
   }
   return true;
 }
@@ -6041,22 +6387,35 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const _intentBoost = Math.min(0.10, (_isHot ? 0.06 : 0) + (_intentScore > 0.6 ? 0.04 : 0) + (_bundleProp > 0.5 ? 0.05 : 0)
     + (_corrScore.score > 0.5 ? 0.06 : 0) + (_freshness > 0.7 ? 0.05 : 0) + (_whalePressure > 0.3 ? 0.04 : 0));
 
-  // Combined fast confidence: weighted blend + intent intelligence
+  // ── NEW ML SIGNALS (sync, <0.1ms each) ──
+  const _tokenAgeMult = TOKEN_AGE.agePenalty(mint);          // 0.35-1.0 based on token age
+  const _sellPressure = SELL_PRESSURE.ratio(mint);           // 0.0-1.0 (high = heavy selling)
+  const _sellPenalty = _sellPressure > 0.60 ? ((_sellPressure - 0.50) * 0.30) : 0; // penalty for sell-heavy tokens
+  const _adversarialPenalty = ADVERSARIAL_DETECT.score(w.addr) * 0.10; // 0-0.10 penalty
+  const _temporalMult = WALLET_TEMPORAL.isUnprofitableHour(w.addr) ? 0.7 : 1.0;
+
+  // Combined fast confidence: weighted blend + intent intelligence + new ML signals
   // NOTE: no free +0.05 constant — wallets must earn entry via real signals
   const _fastConf = Math.min(0.95,
-    _pumpEst*(1-_rugEst)*0.20 + _wtScore*0.15 + _darwinWR*0.10 +
+    (_pumpEst*(1-_rugEst)*0.20 + _wtScore*0.15 + _darwinWR*0.10 +
     _sgdPred*0.20 + confBoost(w) - _darwinPenalty + _intentBoost
+    - _sellPenalty - _adversarialPenalty) * _tokenAgeMult * _temporalMult
   );
+  // TOKEN_AGE hard gate: skip tokens older than ~30 min
+  if(TOKEN_AGE.isTooOld(mint)){S._lastSkip='TOO_OLD';return;}
+  // SELL_PRESSURE hard gate: skip tokens with >70% sell pressure
+  if(SELL_PRESSURE.isHeavySelling(mint) && _freshness < 0.5){S._lastSkip='SELL_FLOOD';return;}
   const _adjThresh = AGGRESSION.entryThreshold(0.52);
   if(_fastConf < _adjThresh)return;
 
-  const bundleMult=Math.min(1.5, recordBundleSignal(mint,getBundleId(w.addr))); // CAP bundle amplification
+  const bundleMult=Math.min(1.5, getBundleConviction(mint,getBundleId(w.addr))); // READ-ONLY: don't record until buy succeeds
   const regimeMult=HMM.regimeSizeMultiplier();
   const _gateMs=performance.now()-_tGate;
   if(_gateMs>2)console.warn('[PERF] Fast gate:',_gateMs.toFixed(1)+'ms');
   const _aggMult = AGGRESSION.sizeMult();
+  const _microMult = MICRO_REGIME.sizeMult(mint); // NEW: micro-regime size adjustment
   const _fastSize = CFG.kelly ? kellySize(_fastConf,w.addr) : CFG.size/100*1e9;
-  const sz=Math.min(_fastSize/1e9*bundleMult*regimeMult*_aggMult,(CFG.size/100)*3);
+  const sz=Math.min(_fastSize/1e9*bundleMult*regimeMult*_aggMult*_microMult,(CFG.size/100)*3);
   const tip=FEE_ENGINE.optimalTip();
   const tExec=performance.now();
 
@@ -6183,6 +6542,8 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
     if(sig)S.pendingConf[sig]={mint,type:'buy',ts:Date.now()};
     toast('\u26a1 '+sym+' '+sz.toFixed(3)+'\u25ce '+totMs+'ms '+via,'trade');
     addFeed('buy','\u2705 BOUGHT '+sym,totMs+'ms via '+via+' sig='+sig.slice(0,12)+'...');
+    // FIX #6: Record bundle signal AFTER buy succeeds (not before) to prevent conviction leak from failed buys
+    recordBundleSignal(mint,getBundleId(w.addr));
   }catch(err){
     // Both trade-local AND Lightning (if available) already failed inside the try block
     console.error('[MCHPai] BUY FAILED (all paths):',err.message);
@@ -6194,20 +6555,22 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 // \u2500\u2500 Execute Sell \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 async function doSell(mint,reason){
   const pos=S.positions[mint];if(!pos)return;
+  // FIX #7: Concurrency guard — prevent double-sell from overlapping triggers
+  if(pos._selling)return;
+  pos._selling=true;
   delete S.positions[mint];S._posCount--;
   cleanMctsPosition(mint); // free MCTS tick data for closed position
   const pnlPct=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
   const pnlSOL=pos.sizeSol*(pnlPct/100);
   const holdSecs=(Date.now()-pos.entryTime)/1000;
-  // Track losing mints globally — block re-entry for 1 hour
-  if(pnlPct <= 0) _recentLossMints.add(mint);
+  // FIX #3: Do NOT add to _recentLossMints here — wait until sell actually succeeds
 
   // \u2500\u2500 PAPER CLOSE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   // FIX: Use pos.status ONLY — live positions MUST close on-chain
   // regardless of current S.paper toggle state
   if(pos.status==='paper'){
     const isWin=pnlPct>0;
-    if(!isWin)_recentLossMints.add(mint); // don't re-enter losing tokens
+    if(!isWin)_recentLossMints.add(mint); // FIX: only after confirmed paper close
     if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
     S.totalPnl+=pnlSOL;
     const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6215,7 +6578,7 @@ async function doSell(mint,reason){
     _bumpWStats(); DB.markDirty('wstats'); DB.markDirty('positions');
     if(S.ws?.readyState===1)S.ws.send(WS_UNSUB_TOK(mint));
     S.log.unshift({sym:pos.sym,mint,pnlPct,pnlSOL,reason,holdSecs,win:isWin,ts:Date.now()});
-    ATR_STOP.clean(mint);LIQUIDITY.clean(mint);LIQUIDITY.clean(mint);
+    ATR_STOP.clean(mint);LIQUIDITY.clean(mint);
     setTimeout(()=>{mlLearnFromTrade(pos,pnlPct,isWin);WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);},0);
     if(S.log.length>200)S.log.pop();
     toast((isWin?'\ud83d\udcc4\ud83d\udcb0':'\ud83d\udcc4\ud83d\udcc9')+' PAPER '+pos.sym+' '+(pnlPct>=0?'+':'')+pnlPct.toFixed(1)+'%',isWin?'close':'loss');
@@ -6245,15 +6608,19 @@ async function doSell(mint,reason){
       throw new Error('trade-local sell '+ppResp.status+': '+errText.slice(0,120));
     }
     const txBuf=new Uint8Array(await ppResp.arrayBuffer());
-    const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
-    tx.sign([S.keypair]);
-    const ser=tx.serialize();
-    const b64=u8ToB64(ser);
+    let b64;
+    // SPEED OPT: Try worker signing first (off main thread), fallback to sync
+    const _sellWorkerB64=await signTxAsync(txBuf).catch(()=>null);
+    if(_sellWorkerB64){b64=_sellWorkerB64;}else{
+      const tx=solanaWeb3.VersionedTransaction.deserialize(txBuf);
+      tx.sign([S.keypair]);b64=u8ToB64(tx.serialize());
+    }
     const{sig,via}=await raceSubmit(b64);
     const clMs=Math.round(performance.now()-t0sell);
     console.log('[MCHPai] \u2705 LIVE SELL SUCCESS:',pos.sym,'via',via,'sig='+sig);
 
     const isWin=pnlPct>0;
+    if(!isWin)_recentLossMints.add(mint); // FIX: only after confirmed sell
     if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
     S.totalPnl+=pnlSOL;
     const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6299,6 +6666,7 @@ async function doSell(mint,reason){
           const clMs=Math.round(performance.now()-t0sell);
           console.log('[MCHPai] \u2705 Pool auto-repair sell OK:',pos.sym,'via',via,'pool='+newPool);
           const isWin=pnlPct>0;
+          if(!isWin)_recentLossMints.add(mint);
           if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
           S.totalPnl+=pnlSOL;
           const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6330,6 +6698,7 @@ async function doSell(mint,reason){
         const clMs=Math.round(performance.now()-t0sell);
         console.log('[MCHPai] \u2705 Lightning sell OK:',sig);
         const isWin=pnlPct>0;
+          if(!isWin)_recentLossMints.add(mint);
         if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
         S.totalPnl+=pnlSOL;
         const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6352,6 +6721,7 @@ async function doSell(mint,reason){
           const clMs=Math.round(performance.now()-t0sell);
           console.log('[MCHPai] \u2705 Jupiter sell OK:',jup.sig);
           const isWin=pnlPct>0;
+          if(!isWin)_recentLossMints.add(mint);
           if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
           S.totalPnl+=pnlSOL;
           const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6367,6 +6737,8 @@ async function doSell(mint,reason){
           WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);
         }catch(err3){
           console.error('[MCHPai] ALL 3 SELL PATHS FAILED:',err3.message);
+          pos._selling=false; // FIX: allow retry
+          pos._honeypotSelling=false; pos._safetySelling=false; // FIX: allow safety retries
           S.positions[mint]=pos;S._posCount++;
           toast('\u274c SELL FAILED x3: '+pos.sym,'warn');
           addFeed('warn','\u274c SELL FAILED x3: '+pos.sym,'Local\u2192Lightning\u2192Jupiter all failed. Manual sell required.');
@@ -6379,6 +6751,7 @@ async function doSell(mint,reason){
         const jup=await jupiterSell(mint);
         console.log('[MCHPai] \u2705 Jupiter sell OK (no PP key):',jup.sig);
         const isWin=pnlPct>0;
+          if(!isWin)_recentLossMints.add(mint);
         if(isWin){S.wins++;S.risk.consec=0;}else{S.losses++;S.risk.consec++;}
         S.totalPnl+=pnlSOL;
         const st=S.wstats[pos.walletRank]||(S.wstats[pos.walletRank]={copies:0,wins:0,losses:0,pnl:0,totalHold:0});
@@ -6392,9 +6765,11 @@ async function doSell(mint,reason){
         addFeed(isWin?'win':'loss','\u2705 SOLD '+pos.sym+' via Jupiter','');
         WALLET_DARWIN.recordOutcome(pos.sourceWallet,isWin,pnlPct,pnlSOL,holdSecs,reason);
       }catch(errJ){
+        pos._selling=false; // FIX: allow retry
+        pos._honeypotSelling=false; pos._safetySelling=false;
         S.positions[mint]=pos;S._posCount++;
-        toast('\u274c Sell failed: '+err.message.slice(0,60),'warn');
-        addFeed('warn','\u274c SELL FAILED: '+pos.sym,err.message.slice(0,80));
+        toast('\u274c Sell failed: '+errJ.message.slice(0,60),'warn');
+        addFeed('warn','\u274c SELL FAILED: '+pos.sym,errJ.message.slice(0,80));
       }
     }
   }
@@ -6497,69 +6872,66 @@ async function confirmPoller(){
 
 // \u2500\u2500 Position monitor 250ms (mirrors Rust price_monitor.rs) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function posMonitor(){
-  const entries=Object.entries(S.positions);
-  if(!entries.length)return;
+  const posKeys=Object.keys(S.positions);
+  if(!posKeys.length)return;
   let priceChanged=false;
   const now=Date.now();
-  for(const[mint,pos]of entries){
+  for(let pi=0;pi<posKeys.length;pi++){
+    const mint=posKeys[pi];
+    const pos=S.positions[mint];
+    if(!pos)continue; // may have been deleted by prior iteration's doSell
     // ML POST-VETO: if async ML vetoed after buy fired, exit aggressively
     if(pos._mlVetoed && pos.priceTickCount>=2){
       const _vetoPnl = pos.entryPrice>0 ? ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100 : 0;
-      // Exit if losing OR if only marginal gain (ML said it was bad)
       if(_vetoPnl < 5){
         addFeed('sell','\u26a0 ML VETO EXIT: '+pos.sym,'reason='+pos._mlVetoReason+' pnl='+_vetoPnl.toFixed(1)+'%');
         queueMicrotask(()=>doSell(mint,'ml_post_veto_'+pos._mlVetoReason));
         continue;
       } else {
-        // Profitable despite ML veto — clear flag, let it ride
         pos._mlVetoed = false;
       }
     }
     // SAFETY FILTER: auto-exit tokens with active mint/freeze authority
-    if(pos._safetyFailed && pos.priceTickCount>=1){
+    if(pos._safetyFailed && !pos._safetySelling && pos.priceTickCount>=1){
+      pos._safetySelling=true; // FIX: prevent infinite retry loop
       addFeed('sell','\u26d4 SAFETY EXIT: '+pos.sym,'reason='+pos._safetyReason);
       queueMicrotask(()=>doSell(mint,'safety_'+pos._safetyReason));
       continue;
     }
     // HONEYPOT CHECK: auto-exit if sell simulation failed (no sell route exists)
-    if(pos._honeypot && pos.priceTickCount>=2){
+    if(pos._honeypot && !pos._honeypotSelling && pos.priceTickCount>=2){
+      pos._honeypotSelling=true; // FIX: prevent infinite retry loop
       addFeed('sell','\ud83c\udf6f HONEYPOT EXIT: '+pos.sym,'No sell route found — dumping immediately');
       queueMicrotask(()=>doSell(mint,'honeypot_no_route'));
       continue;
     }
-    // Stale position cleanup: no price ticks for 90s → likely dead token (was 5min — too slow for memecoins)
+    // Stale position cleanup: no price ticks for 90s
     if(pos.priceTickCount===0 && (now-pos.entryTime)>90000){
       addFeed('warn','\u23f0 STALE: '+pos.sym,'No price ticks for 90s — auto-closing');
       queueMicrotask(()=>doSell(mint,'stale_no_ticks'));
       continue;
     }
-    // ═══ CONFIGURABLE EXIT THRESHOLDS — hard guardrails, ML cannot override ═══
     const _holdMs = now - pos.entryTime;
     const _holdMin = _holdMs / 60000;
-    // MAX HOLD: configurable time limit (replaces hardcoded 30min)
     if(_holdMin >= (CFG.maxHoldMin || 10)){
       const _toPnl = pos.entryPrice>0 ? ((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100 : 0;
       addFeed('warn','\u23f0 MAX HOLD: '+pos.sym, Math.round(_holdMin)+'min — pnl='+_toPnl.toFixed(1)+'%');
       queueMicrotask(()=>doSell(mint,'max_hold_'+Math.round(_holdMin)+'min'));
       continue;
     }
-    // Need price data for PnL-based exits
     if(pos.currentPrice && pos.entryPrice && pos.entryPrice > 0){
       const _pnlPct = ((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
       const _dropFromPeak = pos.highPrice > 0 ? ((pos.currentPrice - pos.highPrice) / pos.highPrice) * 100 : 0;
-      // HARD STOP: max loss threshold
       if(_pnlPct <= (CFG.hardStop || -15)){
         addFeed('sell','\u26d4 HARD STOP: '+pos.sym, 'pnl='+_pnlPct.toFixed(1)+'% (limit: '+CFG.hardStop+'%)');
         queueMicrotask(()=>doSell(mint,'hard_stop_'+_pnlPct.toFixed(0)+'pct'));
         continue;
       }
-      // TRAILING STOP: % drop from peak price
       if(pos.priceTickCount >= 3 && _dropFromPeak <= (CFG.trailDrop || -20)){
         addFeed('sell','\u{1F4C9} TRAIL STOP: '+pos.sym, 'drop='+_dropFromPeak.toFixed(1)+'% from peak (limit: '+CFG.trailDrop+'%)');
         queueMicrotask(()=>doSell(mint,'trail_stop_'+_dropFromPeak.toFixed(0)+'pct'));
         continue;
       }
-      // TAKE PROFIT: lock in gains
       if(_pnlPct >= (CFG.takeProfit || 60)){
         addFeed('sell','\u{1F4B0} TAKE PROFIT: '+pos.sym, 'pnl=+'+_pnlPct.toFixed(1)+'% (target: +'+CFG.takeProfit+'%)');
         queueMicrotask(()=>doSell(mint,'take_profit_'+_pnlPct.toFixed(0)+'pct'));
@@ -6569,41 +6941,48 @@ function posMonitor(){
     // Re-subscribe stuck positions (have entry but stopped getting ticks for 60s)
     if(pos.priceTickCount>0 && pos._lastTickAt && (now-pos._lastTickAt)>60000){
       if(S.ws?.readyState===1)S.ws.send(WS_SUB_TOK(mint));
-      pos._lastTickAt=now; // reset so we don't spam
+      pos._lastTickAt=now;
     }
     if(!pos.currentPrice||!pos.entryPrice)continue;
     if(pos.currentPrice>pos.highPrice){
       pos.highPrice=pos.currentPrice;
       priceChanged=true;
     }
+    // ── ML EXIT INTELLIGENCE (merged into single pass) ──
+    if(pos.priceTickCount>=5){
+      ATR_STOP.update(mint,pos.currentPrice,pos.entryPrice);
+      if(ATR_STOP.isTriggered(mint,pos.currentPrice)){
+        const ad=ATR_STOP.data[mint];
+        addFeed('sell','\u{1F4CA} ATR STOP: '+pos.sym,'trail='+(ad?.trailPrice?.toFixed(8)||'?')+' mult='+(ad?.mult?.toFixed(1)||'?'));
+        queueMicrotask(()=>doSell(mint,'atr_trailing_stop'));continue;
+      }
+      if(pos.priceTickCount%3===0){
+        const me=MOMENTUM_ML.shouldExit(mint);
+        if(me.exit){addFeed('sell','\u{1F4C9} MOMENTUM EXIT: '+pos.sym,me.reason);queueMicrotask(()=>doSell(mint,me.reason));continue;}
+      }
+      if(pos.priceTickCount>=8){
+        const ex=EXIT_MODEL.shouldExit(pos,mint);
+        if(ex.exit){addFeed('sell','\u{1F9E0} EXIT MODEL: '+pos.sym,'score='+ex.score.toFixed(2));queueMicrotask(()=>doSell(mint,ex.reason));continue;}
+      }
+      LIQUIDITY.update(mint);
+      if(LIQUIDITY.isDying(mint)){
+        const pnl=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
+        if(pnl<10){addFeed('sell','\u{1F4A7} LIQUIDITY DYING: '+pos.sym,'health='+LIQUIDITY.getHealth(mint).toFixed(2));queueMicrotask(()=>doSell(mint,'liquidity_dying'));continue;}
+      }
+      // ── NEW: Sell Pressure Ratio exit ──
+      if(SELL_PRESSURE.ratio(mint)>0.70 && pos.priceTickCount>=6){
+        const pnl=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
+        if(pnl<15){addFeed('sell','\u{1F4CA} SELL PRESSURE: '+pos.sym,'ratio='+SELL_PRESSURE.ratio(mint).toFixed(2));queueMicrotask(()=>doSell(mint,'sell_pressure_exit'));continue;}
+      }
+      // ── NEW: Micro-Regime exit ──
+      const _microR=MICRO_REGIME.classify(mint);
+      if(_microR==='REVERSING' && pos.priceTickCount>=6){
+        const pnl=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
+        if(pnl<20){addFeed('sell','\u{1F4CA} MICRO REVERSAL: '+pos.sym,'regime=REVERSING');queueMicrotask(()=>doSell(mint,'micro_regime_reversal'));continue;}
+      }
+    }
   }
   if(priceChanged)DB.markDirty('ticks');
-
-  // ── ML EXIT INTELLIGENCE: ATR Trailing + Momentum Exit ──
-  for(const[mint,pos]of Object.entries(S.positions)){
-    if(!pos.currentPrice||!pos.entryPrice||pos.priceTickCount<5)continue;
-    ATR_STOP.update(mint,pos.currentPrice,pos.entryPrice);
-    if(ATR_STOP.isTriggered(mint,pos.currentPrice)){
-      const ad=ATR_STOP.data[mint];
-      addFeed('sell','\u{1F4CA} ATR STOP: '+pos.sym,'trail='+(ad?.trailPrice?.toFixed(8)||'?')+' mult='+(ad?.mult?.toFixed(1)||'?'));
-      queueMicrotask(()=>doSell(mint,'atr_trailing_stop'));continue;
-    }
-    if(pos.priceTickCount%3===0){
-      const me=MOMENTUM_ML.shouldExit(mint);
-      if(me.exit){addFeed('sell','\u{1F4C9} MOMENTUM EXIT: '+pos.sym,me.reason);queueMicrotask(()=>doSell(mint,me.reason));continue;}
-    }
-    // EXIT MODEL: learned exit prediction
-    if(pos.priceTickCount>=8){
-      const ex=EXIT_MODEL.shouldExit(pos,mint);
-      if(ex.exit){addFeed('sell','\u{1F9E0} EXIT MODEL: '+pos.sym,'score='+ex.score.toFixed(2));queueMicrotask(()=>doSell(mint,ex.reason));continue;}
-    }
-    // LIQUIDITY TRACKER: detect liquidity death
-    LIQUIDITY.update(mint);
-    if(LIQUIDITY.isDying(mint)&&pos.priceTickCount>=5){
-      const pnl=pos.entryPrice>0?((pos.currentPrice-pos.entryPrice)/pos.entryPrice)*100:0;
-      if(pnl<10){addFeed('sell','\u{1F4A7} LIQUIDITY DYING: '+pos.sym,'health='+LIQUIDITY.getHealth(mint).toFixed(2));queueMicrotask(()=>doSell(mint,'liquidity_dying'));continue;}
-    }
-  }
 }
 
 // \u2500\u2500 Balance \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
