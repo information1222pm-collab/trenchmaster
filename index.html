@@ -2421,7 +2421,7 @@ let _lightningUrl = '';
 function _rebuildLightningUrl(){ _lightningUrl = 'https://pumpportal.fun/api/trade?api-key='+(HC.ppKey||''); }
 
 // \u2500\u2500 Config \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:1500,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true,hardStop:-15,trailDrop:-20,takeProfit:60,maxHoldMin:10,sessionDD:-20,requireGmgn:true};
+const CFG={size:50,minsize:5,res:10,cbLimit:5,daily:1500,maxpos:5,tipLamports:500000,jito:true,skipPreflight:true,mirrorExit:true,kelly:true,hardStop:-15,trailDrop:-20,takeProfit:60,maxHoldMin:10,sessionDD:-20,requireGmgn:false};
 let _gmgnFirstPassDone = false; // tracks if GMGN ranker has run
 let _gmgnGotData = false; // true when GMGN API returned real data for at least 1 wallet
 const _recentLossMints = new Set(); // tokens we already lost on — don't re-enter
@@ -5734,8 +5734,8 @@ async function _bootTrader(label) {
       Object.assign(CFG, p);
     }
   } catch(e) {}
-  // ALWAYS enforce GMGN gating — never trust saved state
-  CFG.requireGmgn = true;
+  // GMGN gating disabled — all wallets can trade
+  CFG.requireGmgn = false;
 
   applyUI();
 
@@ -6269,44 +6269,12 @@ function onMsg(m){
 function canTrade(mint, walletTier, bundleConv, walletAddr){
   if(S.paused){S._lastSkip='PAUSED';return false;}
   if(S.positions[mint]){S._lastSkip='HELD';return false;}
-  // DARWIN: hard block blacklisted wallets
-  if(walletAddr && WALLET_DARWIN.isBlacklisted(walletAddr)){S._lastSkip='BLACKLIST';return false;}
-  // DARWIN: block X-tier and C-tier wallets (underperformers)
-  if(walletTier==='X' || walletTier==='C'){S._lastSkip='TIER_'+walletTier;return false;}
-  // ML: Adversarial wallet detector — block wallets farming copy-traders
-  if(walletAddr && ADVERSARIAL_DETECT.isAdversarial(walletAddr)){S._lastSkip='ADVERSARIAL';return false;}
-  // ML: Wallet temporal pattern — block wallets unprofitable at current hour
-  if(walletAddr && WALLET_TEMPORAL.isUnprofitableHour(walletAddr)){S._lastSkip='BAD_HOUR';return false;}
   if(S._posCount>=CFG.maxpos){S._lastSkip='MAX_POS';return false;}
-  // Pre-trade safety: block tokens flagged with active mint/freeze authority
-  if(isKnownUnsafe(mint)){S._lastSkip='UNSAFE';return false;}
-  // TOKEN-LEVEL FILTER: block tokens we've already seen and lost on
-  if(_recentLossMints.has(mint)){S._lastSkip='RECENT_LOSS';return false;}
-  // BUNDLE PILE-IN GUARD: if we just bought this mint recently, skip
-  if(_recentBuyMints.has(mint)){S._lastSkip='PILE_IN';return false;}
-  // GMGN GATING: only enforce when API actually returned data
-  if(_gmgnGotData && walletAddr){
-    const _w = WMAP[walletAddr];
-    if(_w && !_w.gmgnUpdated){S._lastSkip='UNRANKED';return false;}
-    if(_w && _w.wr7d < 0.35){S._lastSkip='LOW_WR_'+Math.round((_w.wr7d||0)*100)+'%';return false;}
-  }
   // Daily limit applies to ALL modes (paper + live)
   if(Date.now()>S.risk.dailyReset){S.risk.daily=0;S.risk.dailyReset=Date.now()+86400000;}
   if(S.risk.daily>=CFG.daily){S._lastSkip='DAILY_CAP';return false;}
-  // SESSION DRAWDOWN HALT: stop trading if session PnL drops too far
-  if(S.balanceSol > 0 && S.totalPnl < 0){
-    const _ddPct = (S.totalPnl / S.balanceSol) * 100;
-    if(_ddPct <= (CFG.sessionDD || -20)){S._lastSkip='DRAWDOWN';return false;}
-  }
   if(S.paper)return true;
-  if(S.risk.cb){S._lastSkip='CIRCUIT_BRK';return false;}
-
-  // HMM Regime gate — BYPASSED first 10 live trades (no data = blocks everything)
-  if((S.wins+S.losses)>=10){
-    const regimeCheck = HMM.isAllowedByRegime(walletTier||'B', bundleConv||1.0);
-    if(!regimeCheck.allowed){S._lastSkip='HMM_REGIME';return false;}
-  }
-
+  // Live mode: only check balance
   const need=CFG.size/100,avail=S.balanceSol-CFG.res/100;
   if(S.balanceSol===0){
   } else if(avail<need){
@@ -6323,21 +6291,7 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
 
   // ── PAPER MODE ──
   if(S.paper){
-    // Paper mode confidence gate — raised to 0.50 to stop random coin entries
-    const _paperPumpEst = w.tier==='S'?0.75:w.tier==='A'?0.68:0.60;
-    const _paperRugEst = w.rank<=5?0.10:w.rank<=20?0.12:0.15;
-    const _paperWt = WALLET_TRUST.getScore(w.addr).score;
-    const _paperConf = _paperPumpEst*(1-_paperRugEst)*0.25 + _paperWt*0.20 + confBoost(w)*1.5;
-    if(_paperConf < 0.38){
-      addFeed('info','\u{1F6AB} CONF SKIP W#'+w.rank+'['+w.tier+'] '+sym, 'conf='+_paperConf.toFixed(3)+' < 0.38');
-      return; // below minimum confidence even for paper
-    }
-    // TOKEN QUALITY GATE: require the triggering wallet to have put meaningful SOL in
-    // If the alpha wallet only put in dust (<0.05 SOL), skip — probably a test/spam tx
-    if(solAmt > 0 && solAmt < 0.05){
-      addFeed('info','\u{1F6AB} DUST SKIP W#'+w.rank+' '+sym, solAmt.toFixed(4)+'\u25ce < 0.05');
-      return; // dust buy — not a real signal
-    }
+    // Paper mode: NO confidence gate — let all signals through to collect data
     const bundleMult=Math.min(1.5, recordBundleSignal(mint,getBundleId(w.addr))); // CAP bundle amplification
     const paperSz=Math.min(((CFG.size/100)||0.1)*bundleMult, (CFG.size/100)*3);
     // Estimate entry price from signal data so exit logic works immediately
@@ -6359,25 +6313,16 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   // decideFast() is SYNC (<1ms) — fires buy BEFORE slow ML runs
   if(!S.keypair||!S.pubkey){addFeed('warn','\u26d4 NO WALLET','Key required');return;}
 
-  // TOKEN QUALITY GATE: skip dust buys from alpha wallets (test/spam txs)
-  if(solAmt > 0 && solAmt < 0.05)return;
-
-  // ── PHASE 1: FAST GATE (sync, <1ms) ──────────────────────────────
-  // Wallet trust (O(1) lookup)
-  if(WALLET_TRUST.isCold(w.addr))return;
+  // ── PHASE 1: FAST GATE (sync, <1ms) — UNBLOCKED: compute scores for sizing/learning only ──
   const _wtScore = WALLET_TRUST.getScore(w.addr).score;
-  // Darwin score (O(1))
   const _dScore = WALLET_DARWIN.getScore(w.addr);
   const _darwinWR = _dScore ? _dScore.wr : 0.5;
   const _darwinPenalty = (_dScore && _dScore.rugs > 0) ? 0.15 : 0;
-  // Cached ML scores if available
   const _cached = _mlCache.get(w.addr);
   const _rugEst = _cached ? _cached.rugProb : (w.rank<=5?0.10:w.rank<=20?0.12:0.15);
   const _pumpEst = _cached ? _cached.pumpScore : (w.tier==='S'?0.75:w.tier==='A'?0.68:0.60);
-  // SGD prediction (sync, <0.1ms)
   const _sgdX = ONLINE_SGD.buildX(w.tier||'B',w.rank,w.wr7d||0,w.pnl7d||0,1.0,solAmt,_rugEst,_pumpEst,HMM.currentRegime().idx,HMM.currentRegime().conf,w.bundleSize||1,false);
   const _sgdPred = ONLINE_SGD.confidence() > 0.3 ? ONLINE_SGD.predict(_sgdX) : 0.55;
-  // INTENT ENGINE + CORRELATOR + LAUNCH SNIPER
   const _intentScore = WALLET_INTENT.intentScore(w.addr);
   const _isHot = WALLET_INTENT.isHotSession(w.addr);
   const _bundleProp = WALLET_INTENT.bundlePropagation(mint, getBundleId(w.addr));
@@ -6387,26 +6332,20 @@ async function doBuy(mint,sym,w,solAmt,tokAmt,rAt){
   const _intentBoost = Math.min(0.10, (_isHot ? 0.06 : 0) + (_intentScore > 0.6 ? 0.04 : 0) + (_bundleProp > 0.5 ? 0.05 : 0)
     + (_corrScore.score > 0.5 ? 0.06 : 0) + (_freshness > 0.7 ? 0.05 : 0) + (_whalePressure > 0.3 ? 0.04 : 0));
 
-  // ── NEW ML SIGNALS (sync, <0.1ms each) ──
-  const _tokenAgeMult = TOKEN_AGE.agePenalty(mint);          // 0.35-1.0 based on token age
-  const _sellPressure = SELL_PRESSURE.ratio(mint);           // 0.0-1.0 (high = heavy selling)
-  const _sellPenalty = _sellPressure > 0.60 ? ((_sellPressure - 0.50) * 0.30) : 0; // penalty for sell-heavy tokens
-  const _adversarialPenalty = ADVERSARIAL_DETECT.score(w.addr) * 0.10; // 0-0.10 penalty
+  // ML signals computed for sizing intelligence — NOT for blocking
+  const _tokenAgeMult = TOKEN_AGE.agePenalty(mint);
+  const _sellPressure = SELL_PRESSURE.ratio(mint);
+  const _sellPenalty = _sellPressure > 0.60 ? ((_sellPressure - 0.50) * 0.30) : 0;
+  const _adversarialPenalty = ADVERSARIAL_DETECT.score(w.addr) * 0.10;
   const _temporalMult = WALLET_TEMPORAL.isUnprofitableHour(w.addr) ? 0.7 : 1.0;
 
-  // Combined fast confidence: weighted blend + intent intelligence + new ML signals
-  // NOTE: no free +0.05 constant — wallets must earn entry via real signals
+  // Confidence score — used for SIZING only, never blocks
   const _fastConf = Math.min(0.95,
     (_pumpEst*(1-_rugEst)*0.20 + _wtScore*0.15 + _darwinWR*0.10 +
     _sgdPred*0.20 + confBoost(w) - _darwinPenalty + _intentBoost
     - _sellPenalty - _adversarialPenalty) * _tokenAgeMult * _temporalMult
   );
-  // TOKEN_AGE hard gate: skip tokens older than ~30 min
-  if(TOKEN_AGE.isTooOld(mint)){S._lastSkip='TOO_OLD';return;}
-  // SELL_PRESSURE hard gate: skip tokens with >70% sell pressure
-  if(SELL_PRESSURE.isHeavySelling(mint) && _freshness < 0.5){S._lastSkip='SELL_FLOOD';return;}
-  const _adjThresh = AGGRESSION.entryThreshold(0.52);
-  if(_fastConf < _adjThresh)return;
+  // NO THRESHOLD — all trades pass through
 
   const bundleMult=Math.min(1.5, getBundleConviction(mint,getBundleId(w.addr))); // READ-ONLY: don't record until buy succeeds
   const regimeMult=HMM.regimeSizeMultiplier();
